@@ -29,7 +29,6 @@ impl CommHandler for Handler {
     let mut received = String::new();
     recv.read_to_end(&mut received)?;
     println!("Received: {}", received);
-    match child.
     Ok(())
   }
 }
