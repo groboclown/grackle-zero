@@ -15,6 +15,8 @@ Here's a trivial example of launching a program within a sandbox, then interacti
 ```rust
 use gracklezero::{sandbox_child, CommHandler, LaunchEnv};
 use std::io::{Read, Write};
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 struct Handler {}
 
@@ -36,11 +38,13 @@ fn main() {
   let cmd = CommHandler{};
   let exit_code = sandbox_child(
       LaunchEnv {
-          cmd: find_exec("file-read"),
-          args: path_as_args(file.path()),
+          cmd: PathBuf::from("the-child-to-sandbox"),
+          args: vec![OsString::from("an-argument")],
           cwd: PathBuf::from("."),
-          env: env_backtrace(),
-          // This leaves stderr untouched for error reporting.
+          env: std::collections::HashMap::new(),
+          // Use stdin to send data to the child process,
+          //     stdout to receive data from the child process,
+          //     leave stderr untouched for error reporting through the parent process's stderr.
           fds: FdSet::basic(&[FdMode::ToChild, FdMode::FromChild, FdMode::KeepInChild]),
       },
       handler,
