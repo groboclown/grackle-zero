@@ -2,7 +2,12 @@
 
 //! Launch the child process.
 
-use std::{collections::{HashMap, HashSet}, ffi::CString, os::unix::ffi::OsStrExt as _, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::CString,
+    os::unix::ffi::OsStrExt as _,
+    path::PathBuf,
+};
 
 use nix::sys::wait::WaitStatus;
 
@@ -183,7 +188,7 @@ fn fd_map(src: Vec<FdMap>) -> HashMap<u32, FdMap> {
 /// Close all open file descriptors except those listed.
 /// This method may be imperfect if
 /// the system has a very high limit on open FDs.
-/// 
+///
 /// Another method would have this look in /proc/self/fd, but that
 /// would allocate memory, unless this takes extreme care using low-level
 /// libc calls.  Additionally, that would need to read from the file system,
@@ -205,12 +210,12 @@ fn close_open_fds(except: &HashSet<nix::libc::c_int>) {
 
 /// Structure that allows querying the state of a launched Linux child process,
 /// outside the CallHandler use.
-pub (crate) struct LinuxChildState {
+pub(crate) struct LinuxChildState {
     pid: nix::unistd::Pid,
 }
 
 impl LinuxChildState {
-    pub (crate) fn child_exit_code(&self) -> Result<i32, SandboxError> {
+    pub(crate) fn child_exit_code(&self) -> Result<i32, SandboxError> {
         match nix::sys::wait::waitpid(
             self.pid,
             nix::sys::wait::WaitPidFlag::from_bits(nix::libc::WNOHANG),
@@ -220,8 +225,9 @@ impl LinuxChildState {
             Ok(WaitStatus::Exited(_pid, c)) => Ok(c),
             Ok(_) => {
                 // Still alive, so need to kill it.
-                nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL)
-                    .map_err(|e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+                nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL).map_err(
+                    |e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                )?;
                 // Call and wait for the termination this time.
                 match nix::sys::wait::waitpid(self.pid, None) {
                     Err(r) => Err(SandboxError::ProcessError(r.to_string())),

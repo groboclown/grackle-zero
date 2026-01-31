@@ -16,6 +16,5 @@ All applications here use the same general process:
 
 * Write to a file.
 * Open a TCP connection to localhost.
-* Start the current process as an executable, and have that second invocation perform a blocked action (like read or write to files).
 * Perform rowhammer attack example.
 * Perform meltdown or spectre attack example to find a secret value in the parent.

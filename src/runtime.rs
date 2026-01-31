@@ -2,7 +2,7 @@
 
 //! Manages the runtime execution of the child process, and the communication
 //! with the process.
-//! 
+//!
 //! The `sandbox_child` function is the main entry point to launch a
 //! sandboxed child process.  It takes a `LaunchEnv` structure that describes
 //! the command to run, its arguments, environment variables, working directory,
@@ -14,7 +14,7 @@
 pub mod error;
 pub mod spawn;
 
-pub use spawn::{CommHandler, LaunchEnv, FdSet, FdMode, Child};
+pub use spawn::{Child, CommHandler, FdMode, FdSet, LaunchEnv};
 
 #[cfg(target_os = "linux")]
 mod spawn_linux;
@@ -86,13 +86,16 @@ mod tests {
             },
             handler,
         );
-        comms.lock().unwrap().ensure(TestComms {
-            exit_code: Some(0),
-            handle_started: true,
-            sent_init: true,
-            read_start: true,
-            read_end: true,
-        }, res);
+        comms.lock().unwrap().ensure(
+            TestComms {
+                exit_code: Some(0),
+                handle_started: true,
+                sent_init: true,
+                read_start: true,
+                read_end: true,
+            },
+            res,
+        );
     }
 
     // Run the read-file program.
@@ -115,13 +118,78 @@ mod tests {
             },
             handler,
         );
-        comms.lock().unwrap().ensure(TestComms {
-            exit_code: Some(101), // seems like rust panic exit code.
-            handle_started: true,
-            sent_init: true,
-            read_start: true,
-            read_end: false,
-        }, res);
+        comms.lock().unwrap().ensure(
+            TestComms {
+                exit_code: Some(101), // seems like rust panic exit code.
+                handle_started: true,
+                sent_init: true,
+                read_start: true,
+                read_end: false,
+            },
+            res,
+        );
+    }
+
+    // Run the cpuid program.
+    #[test]
+    fn cpuid() {
+        let handler = TestHandler::new();
+        let comms = handler.get_comms();
+
+        let res = sandbox_child(
+            LaunchEnv {
+                cmd: find_exec("cpuid"),
+                // This can pass in many different arguments.
+                //
+                args: vec![OsString::from("soumicdhq")],
+                cwd: PathBuf::from("."),
+                env: env_backtrace(),
+                // This leaves stderr untouched for error reporting.
+                fds: FdSet::basic(&[FdMode::ToChild, FdMode::FromChild, FdMode::KeepInChild]),
+            },
+            handler,
+        );
+        comms.lock().unwrap().ensure(
+            TestComms {
+                exit_code: Some(101), // seems like rust panic exit code.
+                handle_started: true,
+                sent_init: true,
+                read_start: true,
+                read_end: false,
+            },
+            res,
+        );
+    }
+
+    // Run the exec-self program.
+    #[test]
+    fn exec_self() {
+        let handler = TestHandler::new();
+        let comms = handler.get_comms();
+
+        let res = sandbox_child(
+            LaunchEnv {
+                cmd: find_exec("exec-self"),
+                // This can pass in many different arguments.
+                //
+                args: vec![OsString::from("soumicdhq")],
+                cwd: PathBuf::from("."),
+                env: env_backtrace(),
+                // This leaves stderr untouched for error reporting.
+                fds: FdSet::basic(&[FdMode::ToChild, FdMode::FromChild, FdMode::KeepInChild]),
+            },
+            handler,
+        );
+        comms.lock().unwrap().ensure(
+            TestComms {
+                exit_code: Some(101), // seems like rust panic exit code.
+                handle_started: true,
+                sent_init: true,
+                read_start: true,
+                read_end: false,
+            },
+            res,
+        );
     }
 
     #[derive(Debug)]
@@ -181,7 +249,6 @@ mod tests {
         comms: Arc<Mutex<TestComms>>,
     }
 
-
     impl CommHandler for TestHandler {
         fn handle(self, mut child: Box<dyn spawn::Child>) -> Result<(), std::io::Error> {
             let ret = self.run_process(&mut child);
@@ -234,7 +301,9 @@ mod tests {
         }
 
         fn run_process(&self, child: &mut Box<dyn spawn::Child>) -> Result<(), std::io::Error> {
-            self.update_comms_value(|c| { c.handle_started = true; })?;
+            self.update_comms_value(|c| {
+                c.handle_started = true;
+            })?;
             if child.exit_status().is_some() {
                 return Err(std::io::Error::new(
                     ErrorKind::BrokenPipe,
@@ -259,7 +328,9 @@ mod tests {
             // Drop the output to signal to the child that the parent is finished writing.
             // This flushes the pipe, and allows the child to read EOF if needed.
             drop(out);
-            self.update_comms_value(|c| { c.sent_init = true; })?;
+            self.update_comms_value(|c| {
+                c.sent_init = true;
+            })?;
 
             inp.read_exact(&mut buf)?;
             if buf[0] != b'1' {
@@ -268,7 +339,9 @@ mod tests {
                     format!("did not read '1', but {}", buf[0]),
                 ));
             }
-            self.update_comms_value(|c| { c.read_start = true; })?;
+            self.update_comms_value(|c| {
+                c.read_start = true;
+            })?;
 
             inp.read_exact(&mut buf)?;
             if buf[0] != b'2' {
@@ -277,7 +350,9 @@ mod tests {
                     format!("did not read '2', but {}", buf[0]),
                 ));
             }
-            self.update_comms_value(|c| { c.read_end = true; })?;
+            self.update_comms_value(|c| {
+                c.read_end = true;
+            })?;
 
             Ok(())
         }
