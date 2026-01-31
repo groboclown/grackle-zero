@@ -1,0 +1,29 @@
+[package]
+name = "gracklezero"
+description = "Communication and spawn capability for child processes with zero permissions."
+version = "0.1.0"
+license = "MIT"
+edition = "2024"
+keywords = ["access-control", "sandbox", "security"]
+include = [
+    "README.md",
+    "LICENSE",
+    "Cargo.toml",
+    "src/**/*.rs",
+]
+
+[features]
+default = []
+
+
+[dependencies]
+which = "8.0.0"
+
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.4"
+lddtree = "0.4.0"
+nix = { version = "0.31.1", features = ["process", "signal", "fs", "feature"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"
