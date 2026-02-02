@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Sandbox for Windows.
-//!
+//! 
 //! Inspired by the Chromium sandboxing model.
 //! Code:
 //!   https://github.com/chromium/chromium/blob/main/sandbox
