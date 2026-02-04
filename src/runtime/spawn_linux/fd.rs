@@ -300,6 +300,7 @@ mod tests {
                 let mut f = unsafe { File::from_raw_fd(17) };
                 exit_on_err(f.write_all(&buf));
                 exit_on_err(f.flush());
+                drop(f);  // because of the "read_to_end", need to close the FD.
 
                 // Read from fd 21.
                 let mut f = unsafe { File::from_raw_fd(21) };

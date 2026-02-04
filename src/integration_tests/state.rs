@@ -50,7 +50,7 @@ impl Expected {
     /// the sending "completed" status.
     pub fn blocked() -> Self {
         Self {
-            exit_code: vec![101], // Seems like the standard Rust exit code for panic.
+            exit_code: vec![101, 111], // Seems like the standard Rust exit code for panic.
             handle_started: true,
             sent_init: true,
             read_start: true,

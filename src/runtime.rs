@@ -27,7 +27,7 @@ pub fn sandbox_child<CH: CommHandler>(
     let child = spawn_linux::launch_child(env)?;
     let state = child.state();
     handler.handle(Box::new(child))?;
-    state.child_exit_code()
+    state.kill().map_err(|e| e.into())
 }
 
 #[cfg(target_os = "windows")]
