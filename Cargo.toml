@@ -23,7 +23,20 @@ which = "8.0.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.4"
 lddtree = "0.4.0"
-nix = { version = "0.31.1", features = ["process", "signal", "fs", "feature"] }
+libseccomp = "0.4.0"
+nix = { version = "0.31.1", features = [
+    "process", "signal", "fs", "feature", "resource",
+    "user",
+] }
+
+# libseccomp documentation includes the note:
+# > if you want to use the libseccomp crate against musl-libc with statically
+# > linked the libseccomp library, you have to set the LIBSECCOMP_LINK_TYPE
+# > and LIBSECCOMP_LIB_PATH environment variables as follows.
+# > ```
+# > $ export LIBSECCOMP_LINK_TYPE=static
+# > $ export LIBSECCOMP_LIB_PATH="the path of the directory containing libseccomp.a (e.g. /usr/lib)"
+# > ```
 
 [dev-dependencies]
 tempfile = "3.24.0"

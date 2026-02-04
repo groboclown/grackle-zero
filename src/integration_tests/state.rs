@@ -199,7 +199,16 @@ impl InnerExecutionState {
                             success = false;
                         }
                     }
-                    Err(_) => (),
+                    Err(e) => {
+                        if expected.exit_code.contains(&0) {
+                            println!(
+                                "Expected success exit code, but runtime returned error: {:?}",
+                                e,
+                            );
+                            success = false;
+                        }
+                    },
+                    
                 }
             }
             None => {
@@ -209,6 +218,12 @@ impl InnerExecutionState {
                 let zero = 0i32;
                 if !expected.exit_code.contains(&zero) {
                     println!("Error: Child failed to terminate through the execution handler.");
+                    success = false;
+                } else if res.is_err() {
+                    println!(
+                        "Expected success exit code, but runtime returned error: {:?}",
+                        res.err().unwrap(),
+                    );
                     success = false;
                 }
             }

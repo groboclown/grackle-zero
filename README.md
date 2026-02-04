@@ -66,6 +66,28 @@ The `stdin` and `stdout` communication should work with passing packets.  Things
 
 The `comm` sub-module offers some basic building blocks to extract packets out of streams.
 
+## Roadmap
+
+### Linux
+
+* [x] Implement execution.
+* [x] Clamp down on filesystem read and write access, as well as some limited network restrictions, using Landlock.
+* [x] Restrict the kinds of OS syscalls that can be made through SecComp.
+* [ ] Add resource restrictions like cgroups and CPU scheduling.
+* [ ] Add defense in depth by adding namespace mounts.
+
+### Windows
+
+* [ ] Implement execution.
+* [ ] Launch the process inside an AppContainer.
+
+### MacOS
+
+Last on the OS support list.
+
+* [ ] Implement execution.
+* [ ] Add a "deny by default" seatbelt profile.
+
 ## License
 
 Grackle Zero is under the [MIT License](LICENSE).

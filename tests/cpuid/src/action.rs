@@ -56,10 +56,10 @@ pub(crate) fn perform(action: String) {
 
 #[cfg(target_os = "linux")]
 /// Get the linux system identifier.
-/// Note that general approaches to this require reading files, which is
-/// tested to be prevented elsewhere.
 fn get_system_id() -> Result<String, String> {
-    Err("uses file access".to_string())
+    std::fs::read_to_string("/etc/machine-id")
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("failed reading /etc/machine-id: {:?}", e))
 }
 
 #[cfg(target_os = "macos")]

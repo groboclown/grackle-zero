@@ -220,6 +220,10 @@ impl LinuxChildState {
     }
 
     pub(crate) fn exit_code(&self) -> Option<i32> {
+        let mut k = match self.killed.lock() {
+            Ok(guard) => guard,
+            Err(_) => return None,
+        };
         let mut c = match self.exit_code.lock() {
             Ok(guard) => guard,
             Err(_) => return None,
@@ -241,6 +245,7 @@ impl LinuxChildState {
                     },
                     Ok(WaitStatus::Exited(_pid, ec)) => {
                         // What we expect.
+                        *k = true;
                         *c = Some(ec);
                         Some(ec)
                     },
@@ -269,39 +274,60 @@ impl LinuxChildState {
         }
 
         // The child cannot listen to signals, so kill it hard.
-        nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL)
-            .map_err(|e| std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("failed terminating child {}: {:?}", self.pid, e),
-            ))?;
+        match nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL) {
+            Ok(_) => {},
+            Err(e) => match e {
+                nix::errno::Errno::ESRCH => {
+                    // The process is already dead.
+                    // Keep going.
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("failed terminating child {}: {:?}", self.pid, e),
+                    ));
+                }
+            }
+        };
 
-        match nix::sys::wait::waitpid(
-            self.pid,
-            nix::sys::wait::WaitPidFlag::from_bits(nix::libc::WNOHANG),
-        ) {
-            // An error usually means that the child never started.  However,
-            // this should never receive a PID if that's the case.
-            // It can also mean that this process doesn't have access, or some
-            // very weird state.
-            Err(r) => {
-                // Don't mark the process as killed.
-                // It might be an intermittent error?
-                Err(r.into())
-            },
-            Ok(WaitStatus::Exited(_pid, c)) => {
-                // What we expect.
-                *k = true;
-                *ec = Some(c);
-                Ok(c)
-            },
-            Ok(v) => {
-                // The kill didn't work, and the process is alive in some odd
-                // state.
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other, format!(
-                    "unexpected wait status after killing child: {:?}",
-                    v
-                )))
+        // Monitor the process until it dies.
+        // This may not immediately return the exit code,
+        // but may intermediately return that the process
+        // encountered a signal.
+        loop {
+            match nix::sys::wait::waitpid(
+                self.pid,
+                // After running kill, wait until it dies.
+                nix::sys::wait::WaitPidFlag::from_bits(0),
+            ) {
+                // An error usually means that the child never started.  However,
+                // this should never receive a PID if that's the case.
+                // It can also mean that this process doesn't have access, or some
+                // very weird state.
+                Err(r) => {
+                    // Don't mark the process as killed.
+                    // It might be an intermittent error?
+                    return Err(r.into())
+                },
+                Ok(WaitStatus::Exited(_pid, c)) => {
+                    // What we expect.
+                    *k = true;
+                    *ec = Some(c);
+                    return Ok(c)
+                },
+                Ok(WaitStatus::Signaled(_pid, _sig, _b)) => {
+                    // The process was killed by a signal, keep waiting.
+                    continue;
+                },
+                Ok(v) => {
+                    // The kill didn't work, and the process is alive in some odd
+                    // state.
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other, format!(
+                        "unexpected wait status after killing child: {:?}",
+                        v
+                    )))
+                }
             }
         }
     }
