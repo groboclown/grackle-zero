@@ -7,11 +7,14 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
         # os: [linux-latest, windows-latest, macOS-latest]
+      include:
+        - os: ubuntu-latest
+          ubuntulibraries: "libseccomp"
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout code
@@ -19,6 +22,10 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Ubuntu Setup
+        if: ${{ matrix.ubuntulibraries }}
+        run: apt-get update && apt-get install ${{ matrix.ubuntulibraries }}
 
       - name: Setup the integration tests
         run: make test-bin
