@@ -17,19 +17,14 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rs/toolchain@v1
 
       # Ubuntu setup
       - name: Apt Setup
         run: sudo apt-get update
 
       - name: Install dependent libraries
-        run: sudo apt-get install -y seccomp
-
-      - name: Ensure the libraries are where we want them
-        run: |
-          find / -name 'libseccomp*' 2>/dev/null && \
-          ld --verbose
+        run: sudo apt-get install -y libseccomp-dev
 
       # Common Build
       - name: Build
@@ -44,7 +39,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rs/toolchain@v1
 
       # Common Build
       - name: Build
