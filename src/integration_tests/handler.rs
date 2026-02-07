@@ -28,7 +28,7 @@ impl CommHandler for TestHandler {
             }
         }
 
-        // There might be a timing issue here - where the child sent the exit
+        // There are sometimes timing issues here - where the child sent the exit
         // message but still hasn't finished.
         if !self.state.set_exit_code(child.exit_status())? {
             child.terminate()?;

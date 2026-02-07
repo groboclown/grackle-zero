@@ -215,6 +215,8 @@ impl InnerExecutionState {
                 // This is only bad if the child is expected to fail.
                 // If it succeeds, then this means the communication process ended as expected,
                 // and the child may have taken some time to complete.
+                // FIXME this logic is wrong.  There are times where the child doesn't terminate
+                // before the handler notices it.
                 let zero = 0i32;
                 if !expected.exit_code.contains(&zero) {
                     println!("Error: Child failed to terminate through the execution handler.");
