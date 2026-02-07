@@ -26,8 +26,10 @@ pub fn sandbox_child<CH: CommHandler>(
 ) -> Result<i32, error::SandboxError> {
     let child = spawn_linux::launch_child(env)?;
     let state = child.state();
-    handler.handle(Box::new(child))?;
-    state.kill().map_err(|e| e.into())
+    let err = handler.handle(Box::new(child));
+    let ret = state.kill().map_err(|e| e.into());
+    err?;
+    ret
 }
 
 #[cfg(target_os = "windows")]
@@ -38,7 +40,17 @@ pub fn sandbox_child<CH: CommHandler>(
     env: LaunchEnv,
     handler: CH,
 ) -> Result<i32, error::SandboxError> {
-    todo!()
+    let child = spawn_windows::launch_child(env)?;
+    let state = child.state();
+    // dropping the child object will kill the child process and all the open handles.
+    let err = handler.handle(Box::new(child));
+    // force termination if the handler didn't and instead quit with an error.
+    let ret = match state.exit_code()? {
+        Some(v) => Ok(v as i32),
+        None => Err(error::SandboxError::ProcessError("did not exit cleanly".to_string()))
+    };
+    err?;
+    ret
 }
 
 #[cfg(target_os = "macos")]
