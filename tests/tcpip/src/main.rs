@@ -6,7 +6,7 @@ mod debug;
 use std::io::{Read, Write};
 
 fn main() {
-    let arg = std::env::args().nth(0).unwrap();
+    let arg = std::env::args().nth(1).unwrap();
     debug::debug(format!("started [{}] [{}]", file!(), arg));
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();

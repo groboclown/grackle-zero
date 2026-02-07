@@ -79,7 +79,9 @@ fn cpuid() {
             cmd: util::find_exec("cpuid"),
 
             // This can pass in many different arguments.
-            args: util::str_as_args("soumicdhq"),
+            // Explicitly leaving out 'o', because that's easy to find out
+            // without any special privileges.
+            args: util::str_as_args("sumicdhq"),
             cwd: PathBuf::from("."),
             env: util::env_backtrace(),
             fds: util::std_fd(),

@@ -75,11 +75,6 @@ pub fn find_exec(exec_name: &str) -> PathBuf {
     exec
 }
 
-/// Create an empty environment set.
-pub fn no_env() -> HashMap<OsString, OsString> {
-    HashMap::new()
-}
-
 /// Create an environment that tells the executed rust program to include the backtrace.
 pub fn env_backtrace() -> HashMap<OsString, OsString> {
     let mut env = HashMap::new();

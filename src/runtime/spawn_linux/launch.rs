@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::CString,
     os::unix::ffi::OsStrExt as _,
-    path::PathBuf,
+    path::PathBuf, sync::{Arc, Mutex},
 };
 
 use nix::sys::wait::WaitStatus;
@@ -22,13 +22,13 @@ use crate::runtime::{
 };
 
 pub struct LinuxChild {
-    pid: nix::unistd::Pid,
+    state: LinuxChildState,
     fds: HashMap<u32, FdMap>,
 }
 
 impl LinuxChild {
     pub(crate) fn state(&self) -> LinuxChildState {
-        LinuxChildState { pid: self.pid }
+        self.state.clone()
     }
 }
 
@@ -48,7 +48,14 @@ pub fn launch_child(env: LaunchEnv) -> Result<LinuxChild, SandboxError> {
     let exec_path = exec_path.as_c_str();
     let cwd = CString::new(env.cwd.as_os_str().as_bytes())?;
     let cwd = cwd.as_c_str();
-    let mut args = Vec::new();
+    let mut args = vec![
+        // This is interesting.  Because the first argument is the
+        // executable, and this is controlling all the aspects for setting
+        // up the program, we need to construct the first argument here as
+        // the executable name.  In order to avoid leaking information, this
+        // constructs a hard-coded executable name.
+        CString::new("sandboxed")?,
+    ];
     for arg in env.args {
         args.push(CString::new(arg.as_os_str().as_bytes())?);
     }
@@ -92,7 +99,7 @@ pub fn launch_child(env: LaunchEnv) -> Result<LinuxChild, SandboxError> {
         Ok(nix::unistd::ForkResult::Parent { child }) => {
             let fds = fd_set.parent_after_fork();
             Ok(LinuxChild {
-                pid: child,
+                state: LinuxChildState::new(child),
                 fds: fd_map(fds),
             })
         }
@@ -101,9 +108,8 @@ pub fn launch_child(env: LaunchEnv) -> Result<LinuxChild, SandboxError> {
 
 impl Child for LinuxChild {
     fn terminate(&self) -> Result<(), std::io::Error> {
-        // The child cannot listen to signals, so kill it hard.
-        nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        self.state.kill()
+            .and(Ok(()))
     }
 
     fn take_stream_from_child(&mut self, fd: u32) -> Option<Box<dyn std::io::Read>> {
@@ -127,20 +133,7 @@ impl Child for LinuxChild {
     }
 
     fn exit_status(&self) -> Option<i32> {
-        match nix::sys::wait::waitpid(
-            self.pid,
-            nix::sys::wait::WaitPidFlag::from_bits(nix::libc::WNOHANG),
-        ) {
-            // An error usually means that the child never started.
-            Err(_) => None,
-            Ok(WaitStatus::Exited(_pid, c)) => Some(c),
-            Ok(WaitStatus::StillAlive) => None,
-            Ok(WaitStatus::Signaled(_, _, _)) => None,
-            Ok(WaitStatus::Stopped(_, _)) => None,
-            Ok(WaitStatus::PtraceEvent(_, _, _)) => None,
-            Ok(WaitStatus::PtraceSyscall(_)) => None,
-            Ok(WaitStatus::Continued(_)) => None,
-        }
+        self.state.exit_code()
     }
 }
 
@@ -210,31 +203,130 @@ fn close_open_fds(except: &HashSet<nix::libc::c_int>) {
 
 /// Structure that allows querying the state of a launched Linux child process,
 /// outside the CallHandler use.
+#[derive(Clone)]
 pub(crate) struct LinuxChildState {
     pid: nix::unistd::Pid,
+    killed: Arc<Mutex<bool>>,
+    exit_code: Arc<Mutex<Option<i32>>>,
 }
 
 impl LinuxChildState {
-    pub(crate) fn child_exit_code(&self) -> Result<i32, SandboxError> {
-        match nix::sys::wait::waitpid(
-            self.pid,
-            nix::sys::wait::WaitPidFlag::from_bits(nix::libc::WNOHANG),
-        ) {
-            // An error usually means that the child never started.
-            Err(r) => Err(SandboxError::ProcessError(r.to_string())),
-            Ok(WaitStatus::Exited(_pid, c)) => Ok(c),
-            Ok(_) => {
-                // Still alive, so need to kill it.
-                nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL).map_err(
-                    |e| SandboxError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)),
-                )?;
-                // Call and wait for the termination this time.
-                match nix::sys::wait::waitpid(self.pid, None) {
-                    Err(r) => Err(SandboxError::ProcessError(r.to_string())),
-                    Ok(WaitStatus::Exited(_pid, c)) => Ok(c),
-                    Ok(_) => Err(SandboxError::ProcessError(
-                        "unexpected wait status after killing child".to_string(),
-                    )),
+    pub(crate) fn new(pid: nix::unistd::Pid) -> Self {
+        LinuxChildState {
+            pid,
+            killed: Arc::new(Mutex::new(false)),
+            exit_code: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(crate) fn exit_code(&self) -> Option<i32> {
+        let mut k = match self.killed.lock() {
+            Ok(guard) => guard,
+            Err(_) => return None,
+        };
+        let mut c = match self.exit_code.lock() {
+            Ok(guard) => guard,
+            Err(_) => return None,
+        };
+        match *c {
+            Some(code) => Some(code),
+            None => {
+                // FIXME if c is None, then perform a wait-pid.
+                match nix::sys::wait::waitpid(
+                    self.pid,
+                    nix::sys::wait::WaitPidFlag::from_bits(nix::libc::WNOHANG),
+                ) {
+                    // An error usually means that the child never started.  However,
+                    // this should never receive a PID if that's the case.
+                    // It can also mean that this process doesn't have access, or some
+                    // very weird state.
+                    Err(_) => {
+                        None
+                    },
+                    Ok(WaitStatus::Exited(_pid, ec)) => {
+                        // What we expect.
+                        *k = true;
+                        *c = Some(ec);
+                        Some(ec)
+                    },
+                    Ok(_) => {
+                        // Still alive
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn kill(&self) -> Result<i32, std::io::Error> {
+        let mut k = self.killed.lock()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
+        let mut ec = self.exit_code.lock()
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
+        if *k {
+            match *ec {
+                Some(c) => return Ok(c),
+                None => return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "BUG: process already killed, but exit code not set",
+                )),
+            }
+        }
+
+        // The child cannot listen to signals, so kill it hard.
+        match nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL) {
+            Ok(_) => {},
+            Err(e) => match e {
+                nix::errno::Errno::ESRCH => {
+                    // The process is already dead.
+                    // Keep going.
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("failed terminating child {}: {:?}", self.pid, e),
+                    ));
+                }
+            }
+        };
+
+        // Monitor the process until it dies.
+        // This may not immediately return the exit code,
+        // but may intermediately return that the process
+        // encountered a signal.
+        loop {
+            match nix::sys::wait::waitpid(
+                self.pid,
+                // After running kill, wait until it dies.
+                nix::sys::wait::WaitPidFlag::from_bits(0),
+            ) {
+                // An error usually means that the child never started.  However,
+                // this should never receive a PID if that's the case.
+                // It can also mean that this process doesn't have access, or some
+                // very weird state.
+                Err(r) => {
+                    // Don't mark the process as killed.
+                    // It might be an intermittent error?
+                    return Err(r.into())
+                },
+                Ok(WaitStatus::Exited(_pid, c)) => {
+                    // What we expect.
+                    *k = true;
+                    *ec = Some(c);
+                    return Ok(c)
+                },
+                Ok(WaitStatus::Signaled(_pid, _sig, _b)) => {
+                    // The process was killed by a signal, keep waiting.
+                    continue;
+                },
+                Ok(v) => {
+                    // The kill didn't work, and the process is alive in some odd
+                    // state.
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other, format!(
+                        "unexpected wait status after killing child: {:?}",
+                        v
+                    )))
                 }
             }
         }
