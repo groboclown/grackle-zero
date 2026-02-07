@@ -12,9 +12,20 @@ All applications here use the same general process:
 
 "stderr" is used for sending status messages, such as error reporting.
 
+In order to make this consistent, all tests use the same `src/debug.rs` and `src/main.rs` file.  They have a custom `action.rs` that follows the format:
+
+```rust
+use super::debug::debug;
+
+pub(crate) fn perform(arg: String) {
+    debug(format!("Note about what this is about to do.  Passed the argument {}", arg));
+    // Perform the operation.
+    // Panic when the system blocks the operation.
+}
+```
+
 ## Future To Do Tests
 
 * Write to a file.
-* Open a TCP connection to localhost.
 * Perform rowhammer attack example.
 * Perform meltdown or spectre attack example to find a secret value in the parent.

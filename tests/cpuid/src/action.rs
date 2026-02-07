@@ -56,10 +56,10 @@ pub(crate) fn perform(action: String) {
 
 #[cfg(target_os = "linux")]
 /// Get the linux system identifier.
-/// Note that general approaches to this require reading files, which is
-/// tested to be prevented elsewhere.
 fn get_system_id() -> Result<String, String> {
-    Err("uses file access".to_string())
+    std::fs::read_to_string("/etc/machine-id")
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("failed reading /etc/machine-id: {:?}", e))
 }
 
 #[cfg(target_os = "macos")]
@@ -73,31 +73,31 @@ fn get_system_id() -> Result<String, String> {
 #[cfg(target_os = "windows")]
 mod u_windows {
     use winreg::{RegKey, enums::HKEY_LOCAL_MACHINE};
-    use wmi::{COMLibrary, WMIConnection};
-
-    thread_local! {
-        static COM_LIB:COMLibrary = COMLibrary::without_security().unwrap();
-    }
+    use wmi::WMIConnection;
 
     pub fn read_local_machine_reg(key: &str, value: &str) -> Result<String, String> {
         use winreg::enums::{KEY_READ, KEY_WOW64_64KEY};
 
         let r_key = RegKey::predef(HKEY_LOCAL_MACHINE)
-            .open_subkey_with_flags(key, KEY_READ | KEY_WOW64_64KEY)?;
+            .open_subkey_with_flags(key, KEY_READ | KEY_WOW64_64KEY)
+            .map_err(|e| format!("failed reading {}: {:?}", key, e))?;
 
-        let id = r_key.get_value(value)?;
+        let id = r_key.get_value(value)
+            .map_err(|e| format!("failed reading {}/{}: {:?}", key, value, e))?;
         Ok(id)
     }
 
-    pub fn wmi_query(query: &str) -> Result<String, String> {
-        let con = WMIConnection::new(COM_LIB.with(|con| *con))?;
-        con.raw_query(query)?;
+    pub fn wmi_query(query: &str) -> Result<Vec<String>, String> {
+        let con = WMIConnection::new()
+            .map_err(|e| format!("failed getting WMI connection: {:?}", e))?;
+        con.raw_query(query)
+            .map_err(|e| format!("failed running WMI query: {:?}", e))
     }
 }
 
 #[cfg(target_os = "windows")]
 fn get_system_id() -> Result<String, String> {
-    u_windows.read_local_machine_reg("SOFTWARE\\Microsoft\\Cryptography", "MachineGuid")
+    u_windows::read_local_machine_reg("SOFTWARE\\Microsoft\\Cryptography", "MachineGuid")
 }
 
 fn get_os_name() -> Result<String, String> {
@@ -137,7 +137,11 @@ fn get_cpu_id() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn get_drive_serial() -> Result<String, String> {
-    u_windows::wmi_query("SELECT SerialNumber FROM Win32_PhysicalMedia")
+    match u_windows::wmi_query("SELECT SerialNumber FROM Win32_PhysicalMedia")?
+        .get(0) {
+        Some(v) => Ok(v.clone()),
+        None => Err("no serial number found".to_string()),
+    }
 }
 
 #[cfg(not(target_os = "windows"))]

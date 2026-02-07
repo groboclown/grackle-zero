@@ -66,6 +66,33 @@ The `stdin` and `stdout` communication should work with passing packets.  Things
 
 The `comm` sub-module offers some basic building blocks to extract packets out of streams.
 
+## Roadmap
+
+### Linux
+
+* [x] Implement execution.
+* [x] Clamp down on filesystem read and write access, as well as some limited network restrictions, using Landlock.
+* [x] Restrict the kinds of OS syscalls that can be made through SecComp.
+* [ ] Add resource restrictions like cgroups and CPU scheduling.
+* [ ] Add defense in depth by adding namespace mounts.
+
+### Windows
+
+* [x] Implement execution.
+* [ ] Launch the process inside an AppContainer.  Without this, the application can read and write files on the host and access the network.
+* [ ] Decide on a method for passing non-standard handles (those that aren't stdin, stdout, stderr) to the child process.  The current version passes them in an environment variable in the format `SANDBOX_HANDLES=FD_NUMBER:0xHANDLE_ADDRESS;FD_NUMBER:0xHANDLE_ADDRESS;...`, where the `FD_NUMBER` is the established "file descriptor number" declared in the `FdSet`, and the `HANDLE_ADDRESS` is the handle value in hexadecimal.
+
+Some known limitations with the Windows imlementation that we have no expectation to change:
+
+* Cannot launch a script file (such as batch).  Instead, this only supports launching a native Windows application.
+
+### MacOS
+
+Last on the OS support list.
+
+* [ ] Implement execution.
+* [ ] Add a "deny by default" seatbelt profile.
+
 ## License
 
 Grackle Zero is under the [MIT License](LICENSE).

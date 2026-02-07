@@ -1,0 +1,47 @@
+name: Rust Build
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # Split up the jobs by OS, as each OS has its
+  # own peculiarities for constructing the build environment.
+
+  ubuntu-build:
+    runs-on: ubuntu-latest
+    steps:
+      # Boilerplate
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Rust
+        run: rustup update
+
+      # Ubuntu setup
+      - name: Apt Setup
+        run: sudo apt-get update
+
+      - name: Install dependent libraries
+        run: sudo apt-get install -y libseccomp-dev
+
+      # Common Build
+      - name: Build
+        run: make
+
+
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      # Boilerplate
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Rust
+        run: rustup update
+
+      # Common Build
+      - name: Build
+        run: make
+
