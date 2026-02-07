@@ -6,7 +6,7 @@ DEBUG_TARGET := target/debug/libgrackle_zero.d
 SRC_FILES := $(shell find src -name '*.rs')
 
 
-build: test 
+build: test build-default
 
 clean: .FORCE
 	$(CARGO) clean

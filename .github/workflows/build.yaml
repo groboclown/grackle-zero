@@ -6,33 +6,47 @@ on:
       - main
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        # os: [linux-latest, windows-latest, macOS-latest]
-        include:
-          - os: ubuntu-latest
-            ubuntulibraries: "seccomp"
-    runs-on: ${{ matrix.os }}
+  # Split up the jobs by OS, as each OS has its
+  # own peculiarities for constructing the build environment.
 
+  ubuntu-build:
+    runs-on: ubuntu-latest
     steps:
+      # Boilerplate
       - name: Checkout code
         uses: actions/checkout@v2
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Ubuntu Setup
-        if: ${{ matrix.ubuntulibraries }}
+      # Ubuntu setup
+      - name: Apt Setup
+        run: sudo apt-get update
+
+      - name: Install dependent libraries
+        run: sudo apt-get install -y seccomp
+
+      - name: Ensure the libraries are where we want them
         run: |
-          sudo apt-get update && \
-          sudo apt-get install -y ${{ matrix.ubuntulibraries }} && \
-          find / -name 'libseccomp*' && \
-          ld --verbose | grep SEARCH_DIR
+          find / -name 'libseccomp*' 2>/dev/null && \
+          ld --verbose
 
-      - name: Setup the integration tests
-        run: make test-bin
+      # Common Build
+      - name: Build
+        run: make
 
-      - name: Run all the tests
-        run: cargo test
+
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      # Boilerplate
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Common Build
+      - name: Build
+        run: make
+
