@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        run: rustup update
 
       # Ubuntu setup
       - name: Apt Setup
@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        run: rustup update
 
       # Common Build
       - name: Build
