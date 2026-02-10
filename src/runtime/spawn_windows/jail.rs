@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-use std::{ffi, mem, os::windows::ffi::OsStrExt};
+use std::{collections::HashMap, ffi, mem};
 use windows::Win32::{
-    Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HANDLE},
-    Security,
+    Foundation::HANDLE,
     System::{JobObjects, Threading},
 };
+use super::error::WindowsSandboxError;
+use super::appcontainer::AppContainer;
+use super::attribute_list::{ThreadAttributeList, ThreadAttributeHandles, ThreadAttributeSecurityCapabilities};
+use super::conv::as_c_str_w;
 
 
 #[derive(Clone)]
@@ -15,98 +18,73 @@ pub struct ProcessInfo {
     pub job: HANDLE,
 }
 
+const APPCONTAINER_NAME: &str = "grackle-zero";
+
 /// Spawn the executable in a restricted mode.
 /// Make sure to pass the handles through the `prepare_inheritance_allowlist` function.
 /// Construct the cmdline argument with the `launch_quote::quote_arguments` function.
 /// Construct the env argument with the `launch_quote::encode_env_strings` function.
 /// 
-/// TODO look at switching the arguments to instead use OsStr, because windows infamously allows
-/// non-unicode valid characters as filenames.
+/// The `cmdline` MUST include the exe's full path as the first argument, due to
+/// how Windows works with AppContainer.
 pub fn launch_restricted<'a, 'b, 'c, 'd>(
     exe: &'a ffi::OsStr,
     cmdline: &'b Vec<u16>,
     cwd: &'c ffi::OsStr,
-    env: Vec<u16>,
+    env: HashMap<ffi::OsString, ffi::OsString>,
     stdin: Option<HANDLE>,
     stdout: Option<HANDLE>,
     stderr: Option<HANDLE>,
     allowed_handles: &'d [HANDLE], // stdin/out/err + any extras
-) -> windows::core::Result<ProcessInfo> {
+) -> Result<ProcessInfo, WindowsSandboxError> {
     unsafe {
         // ---------------------------
-        // Create restricted token
-        let mut h_process_token = HANDLE::default();
-        Threading::OpenProcessToken( // derive restrictions from the current process.
-            Threading::GetCurrentProcess(),
-            Security::TOKEN_ALL_ACCESS,
-            &mut h_process_token,
-        )?;
+        // Pre-condition check.
+        let mut allowed_handles = allowed_handles.to_vec();
+        match stdin { Some(h) => { allowed_handles.push(h); } None => () };
+        match stdout { Some(h) => { allowed_handles.push(h); } None => () };
+        match stderr { Some(h) => { allowed_handles.push(h); } None => () };
+        if allowed_handles.len() <= 0 {
+            // If allowed_handles is empty, then the call to add the handles
+            // to the attribute list fails, because that only allows the call if there
+            // are more than 1 handle to pass.  Rather than add a bunch of conditional
+            // logic around the number of attributes, just require 1.  Note that,
+            // without at least 1 handle, no communication to the child process is possible,
+            // and it has no practical purpose other than spin CPU time.
+            return Err(WindowsSandboxError::setup_message("must have at least 1 handle"));
+        }
 
-        let mut h_restricted = HANDLE::default();
-        // Minimal: DISABLE_MAX_PRIVILEGE. You can also pass SIDs/privileges lists.
-        Security::CreateRestrictedToken(
-            h_process_token,
-            Security::DISABLE_MAX_PRIVILEGE, // strips *all* privileges from the new token.
-            None, // no explicit disabled SIDs, which avoids breaking compatibility for things like DLL loading during group access.
-            None, // no explicit privilege list (all are already stripped by DISABLE_MAX_PRIVILEGE)
-            None, // no restricting SIDs (we will move to tightening this later; misconfiguring it can break things easily)
-            &mut h_restricted
-        )?;
-        CloseHandle(h_process_token)?;
+        // ---------------------------
+        // Create restricted token
+        // In the AppContainer context, the restricted token doesn't work as expected.
+        let mut h_process_token = super::process_token::ProcessToken::current_process()?;
+        let h_restricted = h_process_token.create_restricted_token()?;
+        h_process_token.close()?;
+
+        // ---------------------------
+        // Prepare the AppContainer.
+        let appcontainer = AppContainer::new(APPCONTAINER_NAME)?;
 
         // ---------------------------
         // Build STARTUPINFOEX + attribute list
-        // First call: get the expected size.
-        let mut attr_size: usize = 0;
-        match Threading::InitializeProcThreadAttributeList(
-            None, // query buffer size
-            1, // number of attributes to set 
-            Some(0), // must be 0
-            &mut attr_size, // output required size in bytes
-        ) {
-            Ok(()) => (), // unexpected but treat as valid.
-            Err(e) => {
-                let last_err = GetLastError();
-                if last_err != ERROR_INSUFFICIENT_BUFFER {
-                    // Real failure.
-                    return Err(e);
-                }
-            }
-        }
+        let attributes = ThreadAttributeList::new(vec![
+            // Allow the child process to access the allowed handles list.
+            Box::new(allowed_handles as ThreadAttributeHandles),
 
-        let mut attr_buf = vec![0u8; attr_size];
-        let attr_list = Threading::LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr().cast::<_>());
+            // Security Capabilities tells CreateProcess to create an AppContainer token.
+            // Capabilities = none => no file/network capabilities beyond the default container allowances.
+            Box::new(ThreadAttributeSecurityCapabilities {
+                AppContainerSid: appcontainer.sid().expect("appcontainer already dropped"),
+                Capabilities: std::ptr::null_mut(),
+                CapabilityCount: 0,
+                Reserved: 0,
+            }),
+        ])?;
 
-        Threading::InitializeProcThreadAttributeList(
-            Some(attr_list), // allocated buffer
-            1, // matches number of attributes to set
-            Some(0),
-            &mut attr_size,
-        )?;
-
-        // Attribute: PROC_THREAD_ATTRIBUTE_HANDLE_LIST
-        // This is what ensures ONLY these handles are inherited by the child.
-        // To help stabalize this call, the allowed handles is changed into a vector.
-        if ! allowed_handles.is_empty() {
-            let allowed_handles = allowed_handles.to_vec();
-            let cb_size = allowed_handles.len() * mem::size_of::<HANDLE>();
-            let lp_value = allowed_handles.as_ptr() as *const core::ffi::c_void;
-            Threading::UpdateProcThreadAttribute(
-                attr_list, // attribute list
-                0, // dwFlags must be 0
-                Threading::PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                Some(lp_value),
-                cb_size,
-                None, // not used
-                None, // not used
-            )?;
-        }
-
-        // ---------------------------
         // STARTUPINFOEX with std handles (these must be in allowed_handles)
         let mut si_ex: Threading::STARTUPINFOEXW = mem::zeroed();
         si_ex.StartupInfo.cb = mem::size_of::<Threading::STARTUPINFOEXW>() as u32;
-        si_ex.lpAttributeList = attr_list;
+        si_ex.lpAttributeList = attributes.list();
 
         // Set the std* inputs
         si_ex.StartupInfo.dwFlags = Threading::STARTF_USESTDHANDLES;
@@ -123,26 +101,33 @@ pub fn launch_restricted<'a, 'b, 'c, 'd>(
             Some(v) => { si_ex.StartupInfo.hStdError = v; }
         }
 
-        let mut pi: Threading::PROCESS_INFORMATION = mem::zeroed();
+        // ---------------------------
+        // CreateProcessAsUser with restricted token
+        // While using the AppContainer *should* be sufficient to run just
+        // CreateProcessW (eliminating the need for the child restricted token),
+        // let's see if also running with the restricted token also works.
+        // This may cause issues with basic DLL loading and Win32 runtime behavior,
+        // and may require ACL enabling execution for many objects.
 
         let app = as_c_str_w(exe);
         let cwd = as_c_str_w(cwd);
+        let env = with_default_environ(&appcontainer, env)?;
+        let mut pi: Threading::PROCESS_INFORMATION = mem::zeroed();
 
-        // ---------------------------
-        // CreateProcessAsUser with restricted token
+        //Threading::CreateProcessW(
         Threading::CreateProcessAsUserW(
-            Some(h_restricted), // child restricted token
-            windows::core::PCWSTR(app.as_ptr()), // application name
+            h_restricted.handle(), // restricted token
+            windows::core::PCWSTR(app.as_ptr()),                  // application name
             Some(windows::core::PWSTR(cmdline.clone().as_mut_ptr())), // command line
-            None, // process attributes
-            None, // thread attributes
+            None,                                               // process attributes
+            None,                                                // thread attributes
             // handle inheritance behavior is controlled by the attribute list;
             // the handle-list is the *explicit* allowlist gate.
             true, // must be true to allow handle inheritance to occur at all.
-            Threading::CREATE_SUSPENDED // start suspended to allow job assignment before execution
-            | Threading::EXTENDED_STARTUPINFO_PRESENT // use extended startup information
-            | Threading::CREATE_UNICODE_ENVIRONMENT // set the environment using unicode
-            , 
+                Threading::CREATE_SUSPENDED // start suspended to allow job assignment before execution
+                | Threading::EXTENDED_STARTUPINFO_PRESENT // use extended startup information
+                | Threading::CREATE_UNICODE_ENVIRONMENT   // set the environment using unicode
+            ,
             Some(env.as_ptr() as *const ffi::c_void), // set the environment explicitly
             windows::core::PCWSTR(cwd.as_ptr()), // set the current directory
             &si_ex.StartupInfo, // STARTUPINFOEXW
@@ -150,7 +135,7 @@ pub fn launch_restricted<'a, 'b, 'c, 'd>(
         )?;
 
         // Token no longer needed
-        CloseHandle(h_restricted)?;
+        //h_restricted.close()?;
 
         // ---------------------------
         // Put process in a job object with strong limits
@@ -176,14 +161,56 @@ pub fn launch_restricted<'a, 'b, 'c, 'd>(
         // Resume thread to allow the process to start, and clean up
         Threading::ResumeThread(pi.hThread);
 
-        // Cleanup attribute list
-        Threading::DeleteProcThreadAttributeList(attr_list);
+        // The other structures will drop their handles when this function returns.
 
         Ok(ProcessInfo{ process: pi.hProcess, thread: pi.hThread, job })
     }
 }
 
-/// Convert the OS string into a null-terminated wide (16-bit) C string.
-fn as_c_str_w(s: &ffi::OsStr) -> Vec<u16> {
-    s.encode_wide().chain(std::iter::once(0)).collect()
+fn with_default_environ(
+    app: &AppContainer,
+    mut environ: HashMap<ffi::OsString, ffi::OsString>,
+) -> Result<Vec<u16>, WindowsSandboxError> {
+    let system_root = std::env::var_os("SYSTEMROOT").unwrap_or_else(|| ffi::OsString::new());
+
+    // If SYSTEMROOT is not set, add it from the current process's environment.
+    if !environ.iter().any(|(k, _)| k.to_string_lossy().to_uppercase() == "SYSTEMROOT") {
+        environ.insert(
+            ffi::OsString::from("SystemRoot"),
+            system_root.clone(),
+        );
+    }
+    // ... same for winroot.
+    if !environ.iter().any(|(k, _)| k.to_string_lossy().to_uppercase() == "WINDIR") {
+        environ.insert(
+            ffi::OsString::from("Windir"),
+            std::env::var_os("WINDIR").unwrap_or_else(|| ffi::OsString::new()),
+        );
+    }
+
+    // Use a minimal path, if not given.
+    if !environ.iter().any(|(k, _)| k.to_string_lossy().to_uppercase() == "PATH") {
+        let mut path = ffi::OsString::from(&system_root);
+        path.push(";");
+        path.push(&system_root);
+        path.push("\\System32");
+        environ.insert(
+            ffi::OsString::from("Path"),
+            path,
+        );
+    }
+
+    // Force the AppContainer profile folders.
+    let app_folder = app.folder_path()?;
+    environ.insert("LOCALAPPDATA".into(), app_folder.clone().into());
+    let temp_folder = app_folder.clone() + "\\Temp";
+    environ.insert("TEMP".into(), temp_folder.clone().into());
+    environ.insert("TMP".into(), temp_folder.into());
+
+    // Windows requires the hidden `=C:` only if the CWD is passed to the CreateProcessW,
+    // which it is.
+
+    super::launch_quote::encode_env_strings(
+        environ.into_iter().collect::<Vec<(ffi::OsString, ffi::OsString)>>().as_slice()
+    ).map_err(|e| WindowsSandboxError::Sandbox(e))
 }

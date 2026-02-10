@@ -26,16 +26,15 @@ const LAUNCH_HANDLE_ENV: &str = "SANDBOX_HANDLES";
 
 
 /// Handle the child process launching.
-pub fn launch_child(mut env: LaunchEnv) -> Result<WindowsChild, SandboxError> {
+pub fn launch_child(env: LaunchEnv) -> Result<WindowsChild, SandboxError> {
     let cmd = get_full_path_name(&env.cmd)?;  // must be a real path, not a relative location.
-    let args = launch_quote::quote_arguments(OsStr::new("command.com"), &env.args)?; // use a placeholder cmd name
+    let args = launch_quote::quote_arguments(OsString::from("command.com").as_os_str(), &env.args)?; // Use a fake command name.
     let (fds, handles, env_handles) = create_fds(env.fds)?;
     let cwd = get_full_path_name(&env.cwd)?; // Must be a real path, not a relative location.
     println!("Running [{}] [{}] in [{}]", cmd.to_str().unwrap(),  String::from_utf16(args.as_slice()).unwrap(), cwd.to_str().unwrap());
 
-    let mut environ: Vec<(OsString, OsString)> = env.env.drain().collect();
-    environ.push((OsString::from(LAUNCH_HANDLE_ENV), env_handles));
-    let environ = launch_quote::encode_env_strings(environ.as_slice())?;
+    let mut environ = env.env;
+    environ.insert(OsString::from(LAUNCH_HANDLE_ENV), env_handles);
 
     let child = jail::launch_restricted(
         cmd.as_os_str(),

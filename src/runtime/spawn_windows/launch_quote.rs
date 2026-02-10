@@ -17,19 +17,35 @@ use std::{ffi::{OsStr, OsString}, os::windows::ffi::OsStrExt};
 use crate::runtime::error::SandboxError;
 
 /// Turn a hashmap of environment variables into a format usable by launch_restricted.
+/// Warning: callers must ensure that the list of key/values contains no duplicate keys.
+/// Windows requires that no duplicate keys exist, and this function does not detect duplicates.
+/// For the most part, the caller should ensure the key does not contain '=', but there
+/// are a few special variables that do contain '=' such as '=C:' that are commonly needed by Windows.
 pub fn encode_env_strings(env: &[(OsString, OsString)]) -> Result<Vec<u16>, SandboxError> {
-    let mut block: Vec<u16> = Vec::new();
+    if env.len() == 0 {
+        // An empty environment block should produce just two NULs (double-NUL termination).
+        // Otherwise, the logic will not add the double terminating NUL.
+        return Ok(vec![0, 0]);
+    }
+    let mut pairs: Vec<(&OsString, &OsString)> = env.iter().map(|(k, v)| (k, v)).collect();
+    // Sort by key, case-insensitive
+    pairs.sort_by(|a, b| {
+        let a_key = a.0.to_string_lossy().to_lowercase();
+        let b_key = b.0.to_string_lossy().to_lowercase();
+        a_key.cmp(&b_key)
+    });
 
-    for (k, v) in env {
-        let k = enforce_no_equal(k)?;
+    // println!("DEBUG Environment for child process:");
+    let mut block: Vec<u16> = Vec::new();
+    for (k, v) in pairs {
+        // println!("  {:?}={:?}", k, v);
+        let k = enforce_no_zero(k)?;
         let v = enforce_no_zero(v)?;
-        
         block.extend(k.encode_wide());
-        block.push(':' as u16);
+        block.push('=' as u16);
         block.extend(v.encode_wide());
         block.push(0); // NUL terminator for this entry
     }
-
     block.push(0); // extra NUL terminator ends the block
     Ok(block)
 }
@@ -42,6 +58,7 @@ pub fn quote_arguments<'a, 'b, 'c>(cmd: &'a OsStr, args: &'b Vec<OsString>) -> R
         ret.push(' ' as u16);
         append_arg(&mut ret, arg)?;
     }
+    ret.push(0); // NUL terminator
     Ok(ret)
 }
 
@@ -98,15 +115,6 @@ fn enforce_no_zero(val: &OsString) -> Result<&OsStr, SandboxError> {
     }
 }
 
-fn enforce_no_equal(val: &OsString) -> Result<&OsStr, SandboxError> {
-    let ret = OsStr::new(val);
-    if ret.encode_wide().any(|b| b == '=' as u16 || b == 0) {
-        Err(SandboxError::JailSetup("Environment variable key must not contain '=' or nul".to_string()))
-    } else {
-        Ok(ret)
-    }
-}
-
 fn requires_quoting(val: &OsStr) -> bool {
     val.is_empty() || 
     val.encode_wide().any(char_requires_quoting)
@@ -149,20 +157,28 @@ mod tests {
             (OsString::from("BAZ"), OsString::from("QUX")),
         ]).expect("encoding should succeed");
 
-        assert_eq!(block, join_env_block(&["FOO=BAR", "BAZ=QUX"]));
+        // Sorted order: BAZ, FOO
+        assert_eq!(block, join_env_block(&["BAZ=QUX", "FOO=BAR"]));
+    }
+
+    #[test]
+    fn encode_env_strings_sorts_case_insensitive() {
+        let block = encode_env_strings(&[
+            (OsString::from("foo"), OsString::from("lower")),
+            (OsString::from("Bar"), OsString::from("mixed")),
+            (OsString::from("BAZ"), OsString::from("upper")),
+        ]).expect("encoding should succeed");
+        // Sorted order: Bar, BAZ, foo
+        assert_eq!(block, join_env_block(&["Bar=mixed", "BAZ=upper", "foo=lower"]));
     }
 
     #[test]
     fn encode_env_strings_error_key_with_equal() {
-        let err = encode_env_strings(&[
-            (OsString::from("BAD=KEY"), OsString::from("VAL")),
-        ]).unwrap_err();
-        match err {
-            SandboxError::JailSetup(msg) => {
-                assert!(msg.contains("must not contain '=' or nul"));
-            }
-            e => panic!("unexpected error {:?}", e),
-        }
+        // While allowed, it's not good.
+        let block = encode_env_strings(&[
+            (OsString::from("=C:"), OsString::from("VAL")),
+        ]).unwrap();
+        assert_eq!(block, join_env_block(&["=C:=VAL"]));
     }
 
     #[test]
@@ -187,7 +203,7 @@ mod tests {
         ]).unwrap_err();
         match err {
             SandboxError::JailSetup(msg) => {
-                assert!(msg.contains("must not contain '=' or nul"), "unexpected error: {:?}", msg);
+                assert!(msg.contains("nul byte"), "unexpected error: {:?}", msg);
             }
             e => panic!("unexpected error variant: {:?}", e),
         }
@@ -199,7 +215,7 @@ mod tests {
         let args = vec![OsString::from("foo"), OsString::from("bar")];
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
-        assert_eq!(s, "prog.exe foo bar");
+        assert_eq!(s, "prog.exe foo bar\0");
     }
 
     #[test]
@@ -208,7 +224,7 @@ mod tests {
         let args = vec![OsString::from("with space")];
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
-        assert_eq!(s, "prog.exe \"with space\"");
+        assert_eq!(s, "prog.exe \"with space\"\0");
     }
 
     #[test]
@@ -217,7 +233,7 @@ mod tests {
         let args = vec![OsString::from("")];
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
-        assert_eq!(s, "prog.exe \"\"");
+        assert_eq!(s, "prog.exe \"\"\0");
     }
 
     #[test]
@@ -227,7 +243,7 @@ mod tests {
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
         // Backslashes alone are not enough to trigger quoting.
-        assert_eq!(s, "prog.exe abc\\");
+        assert_eq!(s, "prog.exe abc\\\0");
     }
 
     #[test]
@@ -237,7 +253,7 @@ mod tests {
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
         // Expect the trailing backslash to be doubled inside quotes
-        assert_eq!(s, "prog.exe \"a b\\\\\"" );
+        assert_eq!(s, "prog.exe \"a b\\\\\"\0" );
     }
 
     #[test]
@@ -248,7 +264,7 @@ mod tests {
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
 
-        assert_eq!(s, "prog.exe \"a\\\\\\\\\\\"b\""); // a\\\\\"b
+        assert_eq!(s, "prog.exe \"a\\\\\\\\\\\"b\"\0"); // a\\\\\"b
     }
 
     #[test]
@@ -258,6 +274,13 @@ mod tests {
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
 
-        assert_eq!(s, "\"pr og.exe\" \"\\some\\directory with\\spaces\" argument2");
+        assert_eq!(s, "\"pr og.exe\" \"\\some\\directory with\\spaces\" argument2\0");
+    }
+
+    #[test]
+    fn encode_env_strings_empty_env() {
+        // An empty environment block should produce just two NULs (double-NUL termination).
+        let block = encode_env_strings(&[]).expect("encoding should succeed");
+        assert_eq!(block, vec![0, 0], "Empty env block should be double-NUL");
     }
 }
