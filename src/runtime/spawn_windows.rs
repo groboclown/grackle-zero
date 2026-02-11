@@ -9,6 +9,7 @@
 //! Documentation:
 //!   https://github.com/chromium/chromium/blob/main/docs/design/sandbox.md
 //!   https://github.com/chromium/chromium/blob/main/docs/design/sandbox_faq.md
+//!   https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/SecAuthZ/implementing-an-appcontainer.md
 
 mod appcontainer;
 mod attribute_list;

@@ -32,9 +32,6 @@
 //! set.  Note that these will include the current username in the path.
 //! 
 //! There may be additional needs, depending on the executable being launched.
-//! 
-//! * Some programs require `COMSPEC`.
-//! 
 
 pub mod error;
 pub mod spawn;
