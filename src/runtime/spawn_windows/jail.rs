@@ -58,7 +58,7 @@ pub fn launch_restricted<'a, 'b, 'c, 'd>(
         // Create restricted token
         // In the AppContainer context, the restricted token doesn't work as expected.
         let mut h_process_token = super::process_token::ProcessToken::current_process()?;
-        let h_restricted = h_process_token.create_restricted_token()?;
+        let mut h_restricted = h_process_token.create_restricted_token()?;
         h_process_token.close()?;
 
         // ---------------------------
@@ -135,7 +135,7 @@ pub fn launch_restricted<'a, 'b, 'c, 'd>(
         )?;
 
         // Token no longer needed
-        //h_restricted.close()?;
+        h_restricted.close()?;
 
         // ---------------------------
         // Put process in a job object with strong limits
