@@ -4,7 +4,11 @@ Execute Tasks in Zero Access Mode.
 
 ## Purpose
 
-This runs executions, either for the current program or other programs, in a zero-access sandbox.  It only communicates to the parent process through the file descriptors constructed during setup.
+This library executes other programs in a [zero-access sandbox](#limitations).  It only communicates to the parent process through the file descriptors constructed during setup.  It allows for a program to perform operations dictated by an outside agent that has the possibility of leading to an attack on your system, and give additional defense in depth for the execution.
+
+For example, the id Quake game included a scripting language that was compiled into native code from an embedded C compiler.  While the scripting language allowed for a "safe" subset of C, it still opens the doors for a malicious actor to introduce scripts that can escape the game engine.  Additionally, the script could take advantage of vulnerabilities in the embedded C compiler and perform an escape there.  The Grackle Zero library would allow for running the C compiler and the compiled script within a sandboxed process to add more protections for those components.
+
+The library operates by using the OS provided capabilities to limit the executed program's capabilities.  It does not run them in a virtual machine.  Because this uses usermode techniques, some operating systems allow for some limited access that may not be desired.  As with all security tools, please understand the limitations and advantages of the libraries you choose.  None are a silver bullet.
 
 ## Use
 
@@ -66,6 +70,16 @@ The `stdin` and `stdout` communication should work with passing packets.  Things
 
 The `comm` sub-module offers some basic building blocks to extract packets out of streams.
 
+## Limitations
+
+While the library attempts to use many techniques to limit the capabilities of the executed process, different execution environments have limitations to what they can prevent.  Here we describe all known limitations.  If you can identify others, please open an [issue](https://github.com/groboclown/grackle-zero/issues) so we can help the community make better informed decisions when using this library.
+
+### Windows
+
+* Passes environment variables that include the username.  Required due to using AppContainer.
+* Permits read access to globally readable registry keys.
+* Permits access to the WindowsNT clock APIs.
+
 ## Roadmap
 
 ### Linux
@@ -79,12 +93,19 @@ The `comm` sub-module offers some basic building blocks to extract packets out o
 ### Windows
 
 * [x] Implement execution.
-* [ ] Launch the process inside an AppContainer.  Without this, the application can read and write files on the host and access the network.
-* [ ] Decide on a method for passing non-standard handles (those that aren't stdin, stdout, stderr) to the child process.  The current version passes them in an environment variable in the format `SANDBOX_HANDLES=FD_NUMBER:0xHANDLE_ADDRESS;FD_NUMBER:0xHANDLE_ADDRESS;...`, where the `FD_NUMBER` is the established "file descriptor number" declared in the `FdSet`, and the `HANDLE_ADDRESS` is the handle value in hexadecimal.
+* [x] Lauch the process with a restricted token, limiting the permissions and available SIDs.
+* [x] Launch the process inside an AppContainer.  Without this, the application can read and write files on the host and access the network.
+* [x] Short-term implementation for handle passing (those that aren't stdin, stdout, stderr) to children.  This passes them in an environment variable in the format `SANDBOX_HANDLES=FD_NUMBER:0xHANDLE_ADDRESS;FD_NUMBER:0xHANDLE_ADDRESS;...`, where the `FD_NUMBER` is the established "file descriptor number" declared in the `FdSet`, and the `HANDLE_ADDRESS` is the handle value in hexadecimal.
+* [ ] Disable win32k to prevent UI or kernel-mode window/GUI syscalls.
+* [ ] Use alternate desktop / window station to isolate UI.
+* [ ] Allow running as another user.  This requires adding the other user and having that user's credentials.  While this can greatly increase security by not revealing the current user's name, and by running with significantly reduced capabilities, it requires administrative access for a one-time user creation.
+* [ ] Patch `ntdll.dll`, similar to [Chromium](https://github.com/chromium/chromium/blob/main/sandbox/win/src/interception.cc#L384).
+* [ ] Finalize on a method for passing non-standard handles to the child process.
 
 Some known limitations with the Windows imlementation that we have no expectation to change:
 
 * Cannot launch a script file (such as batch).  Instead, this only supports launching a native Windows application.
+* Cannot prevent the child program from accessing the system time.
 
 ### MacOS
 
@@ -92,6 +113,10 @@ Last on the OS support list.
 
 * [ ] Implement execution.
 * [ ] Add a "deny by default" seatbelt profile.
+
+### Examples
+
+The project should include example applications to showcase possibilities of the library.
 
 ## License
 
