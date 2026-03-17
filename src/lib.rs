@@ -5,9 +5,9 @@
 //! The library that runs child programs with zero OS permissions.
 
 pub mod comm;
+pub mod restrictions;
 pub mod runtime;
+pub mod macros;
 
 pub use runtime::{Child, CommHandler, FdMode, FdSet, LaunchEnv, sandbox_child};
-
-#[cfg(test)]
-mod integration_tests;
+pub use restrictions::{create_compat_restrictions, create_strict_restrictions, Restrictions};

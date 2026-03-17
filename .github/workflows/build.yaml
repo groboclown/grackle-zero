@@ -2,8 +2,11 @@ name: Rust Build
 
 on:
   pull_request:
-    branches:
-      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Makefile'
+      - '.github/workflows/build.yaml'
 
 jobs:
   # Split up the jobs by OS, as each OS has its

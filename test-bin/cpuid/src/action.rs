@@ -82,14 +82,15 @@ mod u_windows {
             .open_subkey_with_flags(key, KEY_READ | KEY_WOW64_64KEY)
             .map_err(|e| format!("failed reading {}: {:?}", key, e))?;
 
-        let id = r_key.get_value(value)
+        let id = r_key
+            .get_value(value)
             .map_err(|e| format!("failed reading {}/{}: {:?}", key, value, e))?;
         Ok(id)
     }
 
     pub fn wmi_query(query: &str) -> Result<Vec<String>, String> {
-        let con = WMIConnection::new()
-            .map_err(|e| format!("failed getting WMI connection: {:?}", e))?;
+        let con =
+            WMIConnection::new().map_err(|e| format!("failed getting WMI connection: {:?}", e))?;
         con.raw_query(query)
             .map_err(|e| format!("failed running WMI query: {:?}", e))
     }
@@ -137,8 +138,7 @@ fn get_cpu_id() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn get_drive_serial() -> Result<String, String> {
-    match u_windows::wmi_query("SELECT SerialNumber FROM Win32_PhysicalMedia")?
-        .get(0) {
+    match u_windows::wmi_query("SELECT SerialNumber FROM Win32_PhysicalMedia")?.get(0) {
         Some(v) => Ok(v.clone()),
         None => Err("no serial number found".to_string()),
     }

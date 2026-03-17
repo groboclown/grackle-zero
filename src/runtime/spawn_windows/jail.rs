@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: MIT
 
-use std::{ffi, mem, os::windows::ffi::OsStrExt};
+
+use super::appcontainer::AppContainer;
+use super::attribute_list::{
+    ThreadAttributeHandles, ThreadAttributeList, ThreadAttributeSecurityCapabilities, policy_flags,
+    ThreadAttributeMitigationPolicy, ThreadAttributeMitigationPolicyFlag, ThreadAttributeChildProcessRestriction, NO_CHILD_PROCESS_RESTRICTION,
+};
+use super::conv::as_c_str_w;
+use super::desktop::UiIsolate;
+use super::error::WindowsSandboxError;
+use std::{collections::HashMap, ffi, mem};
 use windows::Win32::{
-    Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, GetLastError, HANDLE},
-    Security,
+    Foundation::HANDLE,
     System::{JobObjects, Threading},
 };
-
 
 #[derive(Clone)]
 pub struct ProcessInfo {
@@ -15,149 +22,195 @@ pub struct ProcessInfo {
     pub job: HANDLE,
 }
 
+const APPCONTAINER_NAME: &str = "grackle-zero";
+
 /// Spawn the executable in a restricted mode.
 /// Make sure to pass the handles through the `prepare_inheritance_allowlist` function.
 /// Construct the cmdline argument with the `launch_quote::quote_arguments` function.
 /// Construct the env argument with the `launch_quote::encode_env_strings` function.
-/// 
-/// TODO look at switching the arguments to instead use OsStr, because windows infamously allows
-/// non-unicode valid characters as filenames.
+///
+/// The `cmdline` MUST include the exe's full path as the first argument, due to
+/// how Windows works with AppContainer.
 pub fn launch_restricted<'a, 'b, 'c, 'd>(
     exe: &'a ffi::OsStr,
     cmdline: &'b Vec<u16>,
     cwd: &'c ffi::OsStr,
-    env: Vec<u16>,
+    env: HashMap<ffi::OsString, ffi::OsString>,
     stdin: Option<HANDLE>,
     stdout: Option<HANDLE>,
     stderr: Option<HANDLE>,
     allowed_handles: &'d [HANDLE], // stdin/out/err + any extras
-) -> windows::core::Result<ProcessInfo> {
+) -> Result<ProcessInfo, WindowsSandboxError> {
     unsafe {
         // ---------------------------
-        // Create restricted token
-        let mut h_process_token = HANDLE::default();
-        Threading::OpenProcessToken( // derive restrictions from the current process.
-            Threading::GetCurrentProcess(),
-            Security::TOKEN_ALL_ACCESS,
-            &mut h_process_token,
-        )?;
+        // Pre-condition check.
+        let mut allowed_handles = allowed_handles.to_vec();
+        match stdin {
+            Some(h) => {
+                allowed_handles.push(h);
+            }
+            None => (),
+        };
+        match stdout {
+            Some(h) => {
+                allowed_handles.push(h);
+            }
+            None => (),
+        };
+        match stderr {
+            Some(h) => {
+                allowed_handles.push(h);
+            }
+            None => (),
+        };
+        if allowed_handles.len() <= 0 {
+            // If allowed_handles is empty, then the call to add the handles
+            // to the attribute list fails, because that only allows the call if there
+            // are more than 1 handle to pass.  Rather than add a bunch of conditional
+            // logic around the number of attributes, just require 1.  Note that,
+            // without at least 1 handle, no communication to the child process is possible,
+            // and it has no practical purpose other than spin CPU time.
+            return Err(WindowsSandboxError::setup_message(
+                "must have at least 1 handle",
+            ));
+        }
 
-        let mut h_restricted = HANDLE::default();
-        // Minimal: DISABLE_MAX_PRIVILEGE. You can also pass SIDs/privileges lists.
-        Security::CreateRestrictedToken(
-            h_process_token,
-            Security::DISABLE_MAX_PRIVILEGE, // strips *all* privileges from the new token.
-            None, // no explicit disabled SIDs, which avoids breaking compatibility for things like DLL loading during group access.
-            None, // no explicit privilege list (all are already stripped by DISABLE_MAX_PRIVILEGE)
-            None, // no restricting SIDs (we will move to tightening this later; misconfiguring it can break things easily)
-            &mut h_restricted
-        )?;
-        CloseHandle(h_process_token)?;
+        // ---------------------------
+        // Create restricted token
+        // In the AppContainer context, the restricted token doesn't work as expected.
+        let mut h_process_token = super::process_token::ProcessToken::current_process()?;
+        let mut h_restricted = h_process_token.create_restricted_token()?;
+        h_process_token.close()?;
+
+        // ---------------------------
+        // Prepare the AppContainer.
+        let appcontainer = AppContainer::new(APPCONTAINER_NAME)?;
 
         // ---------------------------
         // Build STARTUPINFOEX + attribute list
-        // First call: get the expected size.
-        let mut attr_size: usize = 0;
-        match Threading::InitializeProcThreadAttributeList(
-            None, // query buffer size
-            1, // number of attributes to set 
-            Some(0), // must be 0
-            &mut attr_size, // output required size in bytes
-        ) {
-            Ok(()) => (), // unexpected but treat as valid.
-            Err(e) => {
-                let last_err = GetLastError();
-                if last_err != ERROR_INSUFFICIENT_BUFFER {
-                    // Real failure.
-                    return Err(e);
-                }
-            }
-        }
+        let attributes = ThreadAttributeList::new(vec![
+            // Allow the child process to access the allowed handles list.
+            Box::new(allowed_handles as ThreadAttributeHandles),
+            // Security Capabilities tells CreateProcess to create an AppContainer token.
+            // Capabilities = none => no file/network capabilities beyond the default container allowances.
+            Box::new(ThreadAttributeSecurityCapabilities {
+                AppContainerSid: appcontainer.sid().expect("appcontainer already dropped"),
+                Capabilities: std::ptr::null_mut(),
+                CapabilityCount: 0,
+                Reserved: 0,
+            }),
+            Box::new(NO_CHILD_PROCESS_RESTRICTION as ThreadAttributeChildProcessRestriction),
+            Box::<ThreadAttributeMitigationPolicyFlag>::new(ThreadAttributeMitigationPolicy::slice(&[
+                // Only allow microsoft signed binaries.  This includes the executable, so
+                // don't include it.
+                // policy_flags::PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON,
 
-        let mut attr_buf = vec![0u8; attr_size];
-        let attr_list = Threading::LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr().cast::<_>());
+                // Disable win32k system calls, which prevents a large class of syscalls related to UI and GDI.
+                // However, this also prevents any application that uses user32.dll, which is basically all
+                // applications, GUI or otherwise.  It also means no stdio calls, so it only works with inherited
+                // handles.
+                //policy_flags::PROCESS_CREATION_MITIGATION_POLICY_WIN32K_SYSTEM_CALL_DISABLE_ALWAYS_ON,
 
-        Threading::InitializeProcThreadAttributeList(
-            Some(attr_list), // allocated buffer
-            1, // matches number of attributes to set
-            Some(0),
-            &mut attr_size,
-        )?;
+                // Disable extension points, which prevents a large class of DLL injection and code execution techniques.
+                // policy_flags::PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON,
 
-        // Attribute: PROC_THREAD_ATTRIBUTE_HANDLE_LIST
-        // This is what ensures ONLY these handles are inherited by the child.
-        // To help stabalize this call, the allowed handles is changed into a vector.
-        if ! allowed_handles.is_empty() {
-            let allowed_handles = allowed_handles.to_vec();
-            let cb_size = allowed_handles.len() * mem::size_of::<HANDLE>();
-            let lp_value = allowed_handles.as_ptr() as *const core::ffi::c_void;
-            Threading::UpdateProcThreadAttribute(
-                attr_list, // attribute list
-                0, // dwFlags must be 0
-                Threading::PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                Some(lp_value),
-                cb_size,
-                None, // not used
-                None, // not used
-            )?;
-        }
+                // Enable Data Execution Prevention (DEP) to prevent execution of code from non-executable memory regions.
+                policy_flags::PROCESS_CREATION_MITIGATION_POLICY_DEP_ENABLE,
 
-        // ---------------------------
+                // Enable SEHOP to prevent exploitation of structured exception handling vulnerabilities.
+                policy_flags::PROCESS_CREATION_MITIGATION_POLICY_SEHOP_ENABLE,
+
+                // Enable heap termination to prevent exploitation of heap vulnerabilities.
+                //policy_flags::PROCESS_CREATION_MITIGATION_POLICY_HEAP_TERMINATE_ALWAYS_ON,
+
+                // Optional.  This prevents the process from ever being able to generate code at runtime,
+                // which is a common technique for exploits.  However, this also prevents JIT compilers from working,
+                // so it may cause compatibility issues with some applications.
+                //policy_flags::PROCESS_CREATION_MITIGATION_POLICY_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON,
+
+                // Because UI is disabled, there's no reason to allow fonts.
+                //policy_flags::PROCESS_CREATION_MITIGATION_POLICY_FONT_DISABLE_ALWAYS_ON,
+
+                // Forcibly rebases images that are not dynamic base compatible by acting as though an image base collision happened at load time.
+                // The more restrictive mode, ALWAYS_ON_REQ_RELOCS, is too restrictive for default.
+                policy_flags::PROCESS_CREATION_MITIGATION_POLICY_FORCE_RELOCATE_IMAGES_ALWAYS_ON,
+
+                policy_flags::PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON,
+            ]).into()),
+        ])?;
+
+        // Set up UI isolation.
+        let ui_isolate = UiIsolate::initialize("grackle-zero-desktop")?;
+
         // STARTUPINFOEX with std handles (these must be in allowed_handles)
         let mut si_ex: Threading::STARTUPINFOEXW = mem::zeroed();
         si_ex.StartupInfo.cb = mem::size_of::<Threading::STARTUPINFOEXW>() as u32;
-        si_ex.lpAttributeList = attr_list;
+        si_ex.StartupInfo.lpDesktop = ui_isolate.lp_desktop();
+        si_ex.lpAttributeList = attributes.list();
 
         // Set the std* inputs
         si_ex.StartupInfo.dwFlags = Threading::STARTF_USESTDHANDLES;
         match stdin {
             None => (),
-            Some(v) => { si_ex.StartupInfo.hStdInput = v; }
+            Some(v) => {
+                si_ex.StartupInfo.hStdInput = v;
+            }
         }
         match stdout {
             None => (),
-            Some(v) => { si_ex.StartupInfo.hStdOutput = v; }
+            Some(v) => {
+                si_ex.StartupInfo.hStdOutput = v;
+            }
         }
         match stderr {
             None => (),
-            Some(v) => { si_ex.StartupInfo.hStdError = v; }
+            Some(v) => {
+                si_ex.StartupInfo.hStdError = v;
+            }
         }
-
-        let mut pi: Threading::PROCESS_INFORMATION = mem::zeroed();
-
-        let app = as_c_str_w(exe);
-        let cwd = as_c_str_w(cwd);
 
         // ---------------------------
         // CreateProcessAsUser with restricted token
+        // While using the AppContainer *should* be sufficient to run just
+        // CreateProcessW (eliminating the need for the child restricted token),
+        // let's see if also running with the restricted token also works.
+        // This may cause issues with basic DLL loading and Win32 runtime behavior,
+        // and may require ACL enabling execution for many objects.
+
+        let app = as_c_str_w(exe);
+        let cwd = as_c_str_w(cwd);
+        let env = with_default_environ(&appcontainer, env)?;
+        let mut pi: Threading::PROCESS_INFORMATION = mem::zeroed();
+
+        //Threading::CreateProcessW(
         Threading::CreateProcessAsUserW(
-            Some(h_restricted), // child restricted token
-            windows::core::PCWSTR(app.as_ptr()), // application name
+            h_restricted.handle(),                                    // restricted token
+            windows::core::PCWSTR(app.as_ptr()),                      // application name
             Some(windows::core::PWSTR(cmdline.clone().as_mut_ptr())), // command line
-            None, // process attributes
-            None, // thread attributes
+            None,                                                     // process attributes
+            None,                                                     // thread attributes
             // handle inheritance behavior is controlled by the attribute list;
             // the handle-list is the *explicit* allowlist gate.
             true, // must be true to allow handle inheritance to occur at all.
             Threading::CREATE_SUSPENDED // start suspended to allow job assignment before execution
-            | Threading::EXTENDED_STARTUPINFO_PRESENT // use extended startup information
-            | Threading::CREATE_UNICODE_ENVIRONMENT // set the environment using unicode
-            , 
+                | Threading::EXTENDED_STARTUPINFO_PRESENT // use extended startup information
+                | Threading::CREATE_UNICODE_ENVIRONMENT, // set the environment using unicode
             Some(env.as_ptr() as *const ffi::c_void), // set the environment explicitly
             windows::core::PCWSTR(cwd.as_ptr()), // set the current directory
             &si_ex.StartupInfo, // STARTUPINFOEXW
-            &mut pi, // process information
+            &mut pi, // output process information
         )?;
 
         // Token no longer needed
-        CloseHandle(h_restricted)?;
+        h_restricted.close()?;
 
         // ---------------------------
         // Put process in a job object with strong limits
         let job = JobObjects::CreateJobObjectW(None, windows::core::PCWSTR::null())?;
 
         let mut basic: JobObjects::JOBOBJECT_BASIC_LIMIT_INFORMATION = mem::zeroed();
-        basic.LimitFlags = JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        basic.LimitFlags = JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JobObjects::JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
         basic.ActiveProcessLimit = 1;
 
         let mut ext: JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION = mem::zeroed();
@@ -172,18 +225,78 @@ pub fn launch_restricted<'a, 'b, 'c, 'd>(
 
         JobObjects::AssignProcessToJobObject(job, pi.hProcess)?;
 
+        // TODO inject ntdll patching + inline syscall trampoline.
+        // This requires:
+        //   1. allocating memory in the process (VirtualEllocEx(pi.hProcess, ...))
+        //   2. writing the trampoline code into that memory (WriteProcessMemory(pi.hProcess, addr, wide_dll_path, ...))
+        //   3. creating a remote thread to execute the trampoline (CreateRemoteThread(pi.hProcess, NULL, 0, LoadLibraryW, addr, 0, NULL))
+        //   4. Wait for the loader thread to finish.  This should do something like exposing a named event or a completion protocol.
+
         // ---------------------------
         // Resume thread to allow the process to start, and clean up
         Threading::ResumeThread(pi.hThread);
 
-        // Cleanup attribute list
-        Threading::DeleteProcThreadAttributeList(attr_list);
+        // The other structures will drop their handles when this function returns.
 
-        Ok(ProcessInfo{ process: pi.hProcess, thread: pi.hThread, job })
+        Ok(ProcessInfo {
+            process: pi.hProcess,
+            thread: pi.hThread,
+            job,
+        })
     }
 }
 
-/// Convert the OS string into a null-terminated wide (16-bit) C string.
-fn as_c_str_w(s: &ffi::OsStr) -> Vec<u16> {
-    s.encode_wide().chain(std::iter::once(0)).collect()
+fn with_default_environ(
+    app: &AppContainer,
+    mut environ: HashMap<ffi::OsString, ffi::OsString>,
+) -> Result<Vec<u16>, WindowsSandboxError> {
+    let system_root = std::env::var_os("SYSTEMROOT").unwrap_or_else(|| ffi::OsString::new());
+
+    // If SYSTEMROOT is not set, add it from the current process's environment.
+    if !environ
+        .iter()
+        .any(|(k, _)| k.to_string_lossy().to_uppercase() == "SYSTEMROOT")
+    {
+        environ.insert(ffi::OsString::from("SystemRoot"), system_root.clone());
+    }
+    // ... same for winroot.
+    if !environ
+        .iter()
+        .any(|(k, _)| k.to_string_lossy().to_uppercase() == "WINDIR")
+    {
+        environ.insert(
+            ffi::OsString::from("Windir"),
+            std::env::var_os("WINDIR").unwrap_or_else(|| ffi::OsString::new()),
+        );
+    }
+
+    // Use a minimal path, if not given.
+    if !environ
+        .iter()
+        .any(|(k, _)| k.to_string_lossy().to_uppercase() == "PATH")
+    {
+        let mut path = ffi::OsString::from(&system_root);
+        path.push(";");
+        path.push(&system_root);
+        path.push("\\System32");
+        environ.insert(ffi::OsString::from("Path"), path);
+    }
+
+    // Force the AppContainer profile folders.
+    let app_folder = app.folder_path()?;
+    environ.insert("LOCALAPPDATA".into(), app_folder.clone().into());
+    let temp_folder = app_folder.clone() + "\\Temp";
+    environ.insert("TEMP".into(), temp_folder.clone().into());
+    environ.insert("TMP".into(), temp_folder.into());
+
+    // Windows requires the hidden `=C:` only if the CWD is passed to the CreateProcessW,
+    // which it is.
+
+    super::launch_quote::encode_env_strings(
+        environ
+            .into_iter()
+            .collect::<Vec<(ffi::OsString, ffi::OsString)>>()
+            .as_slice(),
+    )
+    .map_err(|e| WindowsSandboxError::Sandbox(e))
 }

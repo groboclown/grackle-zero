@@ -111,4 +111,5 @@ pub struct LaunchEnv {
     pub cwd: PathBuf,
     pub env: HashMap<OsString, OsString>,
     pub fds: FdSet,
+    pub restrictions: crate::Restrictions,
 }

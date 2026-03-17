@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 
+use super::jail::ProcessInfo;
 use std::sync::{Arc, Mutex};
 use windows::{
     Win32::{
@@ -8,8 +9,6 @@ use windows::{
     },
     core,
 };
-use super::jail::ProcessInfo;
-
 
 /// Allows monitoring the state of the launched process.
 #[derive(Clone)]
@@ -66,7 +65,8 @@ impl ProcessState {
         match (*guard).exit_code {
             Some(c) => Ok(Some(c)),
             None => {
-                let code = self.inner_exit_code()
+                let code = self
+                    .inner_exit_code()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e))?;
                 (*guard).exit_code = code.clone();
                 Ok(code)
@@ -87,7 +87,6 @@ impl ProcessState {
         }
     }
 }
-
 
 impl Drop for ProcessState {
     fn drop(&mut self) {
@@ -113,7 +112,6 @@ impl Drop for ProcessState {
         }
     }
 }
-
 
 struct MutableProcessState {
     terminated: bool,
