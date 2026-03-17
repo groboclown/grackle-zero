@@ -10,27 +10,27 @@
 //! the communication with the child process.  When the `CommHandler` instance
 //! exits execution, the child process is terminated if it is still running, and its
 //! exit code is returned.
-//! 
+//!
 //! ## OS specific notes
-//! 
+//!
 //! ### Windows
-//! 
+//!
 //! #### Environment Variables
-//! 
+//!
 //! On Windows, the operating system requires that the `SystemRoot` environment variable
 //! be passed to the child process.  If the caller does not include it in the `env` field of
 //! `LaunchEnv`, then the `sandbox_child` function will automatically add it with the value
 //! from the current process's environment.
-//! 
+//!
 //! Commonly, some version of the `Path` environment variable is required, to specify the list
 //! of directories to search for the executable's dependent shared libraries.
 //! If the caller does not include `Path` in the `env` field of `LaunchEnv`, then the
 //! `sandbox_child` will add in a simple Path (`%SystemRoot%;%SystemRoot%\System32`).
-//! 
+//!
 //! Additionally, the `TEMP`, `TMP`, and `LOCALAPPDATA` environment variables are required for
 //! the AppContainer profile to work correctly, and they override whatever the caller may have
 //! set.  Note that these will include the current username in the path.
-//! 
+//!
 //! There may be additional needs, depending on the executable being launched.
 
 pub mod error;
@@ -69,7 +69,9 @@ pub fn sandbox_child<CH: CommHandler>(
     // force termination if the handler didn't and instead quit with an error.
     let ret = match state.exit_code()? {
         Some(v) => Ok(v as i32),
-        None => Err(error::SandboxError::ProcessError("did not exit cleanly".to_string()))
+        None => Err(error::SandboxError::ProcessError(
+            "did not exit cleanly".to_string(),
+        )),
     };
     err?;
     ret

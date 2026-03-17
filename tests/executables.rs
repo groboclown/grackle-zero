@@ -1,13 +1,19 @@
+// SPDX-License-Identifier: MIT
+
 //! All the executables to test.
 
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::{LaunchEnv, sandbox_child};
+use gracklezero::{LaunchEnv, sandbox_child, compat_restrictions};
 
-use super::handler;
-use super::state::Expected;
-use super::util;
+mod common;
+use common::{
+    handler,
+    util,
+    server::TcpServer,
+    state::Expected,
+};
 
 /// Perform no action.
 /// This ensures that, for a program that performs no offending operation,
@@ -22,6 +28,7 @@ fn noop() {
             cwd: PathBuf::from("."),
             env: util::env_backtrace(),
             fds: util::std_fd(),
+            restrictions: compat_restrictions!("noop"),
         },
         h,
     );
@@ -45,6 +52,7 @@ fn file_read() {
             cwd: PathBuf::from("."),
             env: util::env_backtrace(),
             fds: util::std_fd(),
+            restrictions: compat_restrictions!("file-read"),
         },
         h,
     );
@@ -65,6 +73,7 @@ fn exec_self() {
             cwd: PathBuf::from("."),
             env: util::env_backtrace(),
             fds: util::std_fd(),
+            restrictions: compat_restrictions!("exec-self"),
         },
         h,
     );
@@ -85,6 +94,7 @@ fn cpuid() {
             cwd: PathBuf::from("."),
             env: util::env_backtrace(),
             fds: util::std_fd(),
+            restrictions: compat_restrictions!("cpuid"),
         },
         h,
     );
@@ -96,7 +106,7 @@ fn cpuid() {
 /// executable to connect to it.
 #[test]
 fn tcpip() {
-    let server = super::server::TcpServer::new().expect("failed to create a TCP/IP server");
+    let server = TcpServer::new().expect("failed to create a TCP/IP server");
     let addr: String = server.addr().to_string();
     let (h, m) = handler::new();
     let res = sandbox_child(
@@ -106,6 +116,7 @@ fn tcpip() {
             cwd: PathBuf::from("."),
             env: util::env_backtrace(),
             fds: util::std_fd(),
+            restrictions: compat_restrictions!("tcpip"),
         },
         h,
     );

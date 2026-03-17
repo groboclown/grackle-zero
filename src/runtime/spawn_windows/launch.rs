@@ -1,18 +1,25 @@
 //! Run the process in such a way that it can used by the spawn handler.
 
-
-use std::{collections::HashMap, ffi::{OsStr, OsString}, path::PathBuf};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+};
 
 use windows::Win32::Foundation::HANDLE;
 
-use crate::{FdSet, runtime::{
-    error::SandboxError,
-    spawn::{Child, LaunchEnv},
-    spawn_windows::{
-        fd::{StdIo, StdIoFd, StdIoSet, StreamDirection, WinFd, WinFdSet},
-        jail, launch_quote, monitor::ProcessState
+use crate::{
+    FdSet,
+    runtime::{
+        error::SandboxError,
+        spawn::{Child, LaunchEnv},
+        spawn_windows::{
+            fd::{StdIo, StdIoFd, StdIoSet, StreamDirection, WinFd, WinFdSet},
+            jail, launch_quote,
+            monitor::ProcessState,
+        },
     },
-}};
+};
 
 pub struct WindowsChild {
     state: ProcessState,
@@ -24,14 +31,18 @@ pub struct WindowsChild {
 
 const LAUNCH_HANDLE_ENV: &str = "SANDBOX_HANDLES";
 
-
 /// Handle the child process launching.
 pub fn launch_child(env: LaunchEnv) -> Result<WindowsChild, SandboxError> {
-    let cmd = get_full_path_name(&env.cmd)?;  // must be a real path, not a relative location.
+    let cmd = get_full_path_name(&env.cmd)?; // must be a real path, not a relative location.
     let args = launch_quote::quote_arguments(OsString::from("command.com").as_os_str(), &env.args)?; // Use a fake command name.
     let (fds, handles, env_handles) = create_fds(env.fds)?;
     let cwd = get_full_path_name(&env.cwd)?; // Must be a real path, not a relative location.
-    println!("Running [{}] [{}] in [{}]", cmd.to_str().unwrap(),  String::from_utf16(args.as_slice()).unwrap(), cwd.to_str().unwrap());
+    println!(
+        "Running [{}] [{}] in [{}]",
+        cmd.to_str().unwrap(),
+        String::from_utf16(args.as_slice()).unwrap(),
+        cwd.to_str().unwrap()
+    );
 
     let mut environ = env.env;
     environ.insert(OsString::from(LAUNCH_HANDLE_ENV), env_handles);
@@ -55,11 +66,10 @@ pub fn launch_child(env: LaunchEnv) -> Result<WindowsChild, SandboxError> {
         },
         handles.as_slice(),
     )
-        .map_err(|e| SandboxError::JailSetup(format!("problem launching process: {:?}", e)))?;
+    .map_err(|e| SandboxError::JailSetup(format!("problem launching process: {:?}", e)))?;
 
     Ok(WindowsChild::new(child, fds))
 }
-
 
 impl WindowsChild {
     fn new(proc: jail::ProcessInfo, fds: WinFdSet) -> Self {
@@ -77,12 +87,10 @@ impl WindowsChild {
         }
     }
 
-
     pub(crate) fn state(&self) -> ProcessState {
         self.state.clone()
     }
 }
-
 
 impl Child for WindowsChild {
     fn terminate(&self) -> Result<(), std::io::Error> {
@@ -91,27 +99,25 @@ impl Child for WindowsChild {
 
     fn take_stream_from_child(&mut self, fd: u32) -> Option<Box<dyn std::io::Read>> {
         match fd {
-            0 => None,  // stdin is a parent writer, not a reader.
+            0 => None, // stdin is a parent writer, not a reader.
             1 => match self.stdout.take() {
                 None => None,
                 Some(s) => match s {
                     StdIoFd::None => None,
                     StdIoFd::Pipe(mut v) => v.as_reader(),
-                }
-            }
+                },
+            },
             2 => match self.stderr.take() {
                 None => None,
                 Some(s) => match s {
                     StdIoFd::None => None,
                     StdIoFd::Pipe(mut v) => v.as_reader(),
-                }
-            }
-            fd => {
-                match self.others.remove(&fd) {
-                    None => None,
-                    Some(mut v) => v.as_reader(),
-                }
-            }
+                },
+            },
+            fd => match self.others.remove(&fd) {
+                None => None,
+                Some(mut v) => v.as_reader(),
+            },
         }
     }
 
@@ -122,16 +128,14 @@ impl Child for WindowsChild {
                 Some(s) => match s {
                     StdIoFd::None => None,
                     StdIoFd::Pipe(mut v) => v.as_writer(),
-                }
-            }
+                },
+            },
             1 => None, // stdout is a parent reader, not writer
             2 => None, // stderr is a parent reader, not writer
-            fd => {
-                match self.others.remove(&fd) {
-                    None => None,
-                    Some(mut v) => v.as_writer(),
-                }
-            }
+            fd => match self.others.remove(&fd) {
+                None => None,
+                Some(mut v) => v.as_writer(),
+            },
         }
     }
 
@@ -143,7 +147,6 @@ impl Child for WindowsChild {
     }
 }
 
-
 fn create_fds(src: FdSet) -> Result<(WinFdSet, Vec<HANDLE>, OsString), SandboxError> {
     let mut stdin = StdIo::None;
     let mut stdout = StdIo::None;
@@ -154,7 +157,11 @@ fn create_fds(src: FdSet) -> Result<(WinFdSet, Vec<HANDLE>, OsString), SandboxEr
         match fd.fd {
             0 => {
                 stdin = match fd.mode {
-                    crate::FdMode::FromChild => { return Err(SandboxError::JailSetup("stdio marked as read from child".to_string())); }
+                    crate::FdMode::FromChild => {
+                        return Err(SandboxError::JailSetup(
+                            "stdio marked as read from child".to_string(),
+                        ));
+                    }
                     crate::FdMode::Null => StdIo::None,
                     crate::FdMode::KeepInChild => StdIo::PassThrough,
                     crate::FdMode::ToChild => StdIo::Pipe,
@@ -165,7 +172,11 @@ fn create_fds(src: FdSet) -> Result<(WinFdSet, Vec<HANDLE>, OsString), SandboxEr
                     crate::FdMode::FromChild => StdIo::Pipe,
                     crate::FdMode::Null => StdIo::None,
                     crate::FdMode::KeepInChild => StdIo::PassThrough,
-                    crate::FdMode::ToChild => { return Err(SandboxError::JailSetup("stdout marked as write to child".to_string())); }
+                    crate::FdMode::ToChild => {
+                        return Err(SandboxError::JailSetup(
+                            "stdout marked as write to child".to_string(),
+                        ));
+                    }
                 }
             }
             2 => {
@@ -173,26 +184,31 @@ fn create_fds(src: FdSet) -> Result<(WinFdSet, Vec<HANDLE>, OsString), SandboxEr
                     crate::FdMode::FromChild => StdIo::Pipe,
                     crate::FdMode::Null => StdIo::None,
                     crate::FdMode::KeepInChild => StdIo::PassThrough,
-                    crate::FdMode::ToChild => { return Err(SandboxError::JailSetup("stdout marked as write to child".to_string())); }
-                }
-            }
-            _ => {
-                match fd.mode {
-                    crate::FdMode::Null => (),
-                    crate::FdMode::KeepInChild => {
-                        return Err(SandboxError::JailSetup("windows cannot pass-through arbitrary handles".to_string()));
-                    },
                     crate::FdMode::ToChild => {
-                        others.push(WinFd::new(fd.fd, StreamDirection::ToChild)
-                            .map_err(|e| SandboxError::JailSetup(format!("problem setting up fd: {:?}", e)))?);
+                        return Err(SandboxError::JailSetup(
+                            "stdout marked as write to child".to_string(),
+                        ));
                     }
-                    crate::FdMode::FromChild => {
-                        others.push(WinFd::new(fd.fd, StreamDirection::FromChild)
-                            .map_err(|e| SandboxError::JailSetup(format!("problem setting up fd: {:?}", e)))?);
-                    }
-
                 }
             }
+            _ => match fd.mode {
+                crate::FdMode::Null => (),
+                crate::FdMode::KeepInChild => {
+                    return Err(SandboxError::JailSetup(
+                        "windows cannot pass-through arbitrary handles".to_string(),
+                    ));
+                }
+                crate::FdMode::ToChild => {
+                    others.push(WinFd::new(fd.fd, StreamDirection::ToChild).map_err(|e| {
+                        SandboxError::JailSetup(format!("problem setting up fd: {:?}", e))
+                    })?);
+                }
+                crate::FdMode::FromChild => {
+                    others.push(WinFd::new(fd.fd, StreamDirection::FromChild).map_err(|e| {
+                        SandboxError::JailSetup(format!("problem setting up fd: {:?}", e))
+                    })?);
+                }
+            },
         };
     }
 
@@ -201,7 +217,9 @@ fn create_fds(src: FdSet) -> Result<(WinFdSet, Vec<HANDLE>, OsString), SandboxEr
     for fd in &others {
         match fd.child() {
             None => (),
-            Some(v) => { handles.push(v); }
+            Some(v) => {
+                handles.push(v);
+            }
         }
         match fd.as_env_val() {
             None => (),
@@ -211,13 +229,19 @@ fn create_fds(src: FdSet) -> Result<(WinFdSet, Vec<HANDLE>, OsString), SandboxEr
         }
     }
     Ok((
-        WinFdSet::new(StdIoSet { stdin, stdout, stderr }, others)
-            .map_err(|e| SandboxError::JailSetup(format!("problem setting up fd: {:?}", e)))?,
+        WinFdSet::new(
+            StdIoSet {
+                stdin,
+                stdout,
+                stderr,
+            },
+            others,
+        )
+        .map_err(|e| SandboxError::JailSetup(format!("problem setting up fd: {:?}", e)))?,
         handles,
         env_handles,
     ))
 }
-
 
 // Get the canonical Win32 path, not the extended-length path that canonicalize() generates.
 fn get_full_path_name(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
@@ -227,8 +251,12 @@ fn get_full_path_name(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
     let path = path.canonicalize()?;
     let path = path.as_os_str().as_encoded_bytes();
     if &path[0..4] == br"\\?\" as &[u8] {
-        Ok(PathBuf::from(unsafe { OsStr::from_encoded_bytes_unchecked(&path[4..]) }))
+        Ok(PathBuf::from(unsafe {
+            OsStr::from_encoded_bytes_unchecked(&path[4..])
+        }))
     } else {
-        Ok(PathBuf::from(unsafe { OsStr::from_encoded_bytes_unchecked(path) }))
+        Ok(PathBuf::from(unsafe {
+            OsStr::from_encoded_bytes_unchecked(path)
+        }))
     }
 }

@@ -11,4 +11,9 @@ clean: .FORCE
 		$(MAKE) -C $$dir clean; \
 	done
 
+format: .FORCE
+	for dir in $(SUBDIRS); do \
+		$(MAKE) -C $$dir format; \
+	done
+
 .FORCE:

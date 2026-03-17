@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{FdMode, FdSet};
+use gracklezero::{FdMode, FdSet};
 
 /// Convert the path value into an array of arguments.
 pub fn path_as_args(path: &Path) -> Vec<OsString> {
@@ -41,7 +41,7 @@ const EXEC_SUFFIX: &str = "";
 /// Find the executable for the given test program.
 pub fn find_exec(exec_name: &str) -> PathBuf {
     // Find the 'tests' directory off the root.
-    let test_dir = Path::new("tests");
+    let test_dir = Path::new("test-bin");
     assert!(test_dir.is_dir());
 
     // Slowly build up the path, bit by bit.

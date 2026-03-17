@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: MIT
+
 //! CommHandler implementation for the tests.
 
 use std::io::ErrorKind;
 
 use super::state::{ExecutionState, HandlerCheck};
-use crate::{Child, CommHandler};
+use gracklezero::{Child, CommHandler};
 
 /// Create the CommHandler and HandlerCheck for the test execution.
 pub fn new() -> (TestHandler, HandlerCheck) {

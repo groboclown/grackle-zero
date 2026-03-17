@@ -114,6 +114,10 @@ Last on the OS support list.
 * [ ] Implement execution.
 * [ ] Add a "deny by default" seatbelt profile.
 
+### General Improvements
+
+Allow for optional security checks.  These would need to be made generic enough to allow the library to list as enabled, but then the implementation is left to the operating system.  This would need to look similar to the Rust landlock crate which has "required enforcement" to "best try enforcement".
+
 ### Examples
 
 The project should include example applications to showcase possibilities of the library.

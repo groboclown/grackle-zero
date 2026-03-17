@@ -36,8 +36,12 @@ impl Into<SandboxError> for WindowsSandboxError {
     fn into(self) -> SandboxError {
         match self {
             Self::Sandbox(s) => s,
-            Self::Setup(e) => SandboxError::JailSetup(format!("problem setting up the process: {:?}", e)),
-            Self::Run(e) => SandboxError::ProcessError(format!("problem handling process: {:?}", e)),
+            Self::Setup(e) => {
+                SandboxError::JailSetup(format!("problem setting up the process: {:?}", e))
+            }
+            Self::Run(e) => {
+                SandboxError::ProcessError(format!("problem handling process: {:?}", e))
+            }
         }
     }
 }

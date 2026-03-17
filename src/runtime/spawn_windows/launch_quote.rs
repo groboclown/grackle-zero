@@ -1,18 +1,21 @@
 //! Windows Argument Quoting Rules
-//! 
+//!
 //! Unfortunately, there currently is no crate that supplies this logic, and
 //! the Rust standard library has these as crate private.  Therefore, there's
 //! no choice (at the moment) than to implement this tricky logic here.
-//! 
+//!
 //! See "Everyone quotes command line arguments the wrong way":
 //!   https://learn.microsoft.com/en-us/archive/blogs/twistylittlepassagesallalike/everyone-quotes-command-line-arguments-the-wrong-way
 //! and
 //!   https://docs.microsoft.com/en-us/archive/blogs/larryosterman/the-windows-command-line-is-just-a-string
-//! 
+//!
 //! Note that this also must include the command name that is traditionally
 //! passed as arg 0.
 
-use std::{ffi::{OsStr, OsString}, os::windows::ffi::OsStrExt};
+use std::{
+    ffi::{OsStr, OsString},
+    os::windows::ffi::OsStrExt,
+};
 
 use crate::runtime::error::SandboxError;
 
@@ -51,7 +54,10 @@ pub fn encode_env_strings(env: &[(OsString, OsString)]) -> Result<Vec<u16>, Sand
 }
 
 /// Quote the command and arguments into the argument parameter to the launch function.
-pub fn quote_arguments<'a, 'b, 'c>(cmd: &'a OsStr, args: &'b Vec<OsString>) -> Result<Vec<u16>, SandboxError> {
+pub fn quote_arguments<'a, 'b, 'c>(
+    cmd: &'a OsStr,
+    args: &'b Vec<OsString>,
+) -> Result<Vec<u16>, SandboxError> {
     let mut ret = vec![];
     append_arg(&mut ret, &OsString::from(cmd))?;
     for arg in args {
@@ -61,7 +67,6 @@ pub fn quote_arguments<'a, 'b, 'c>(cmd: &'a OsStr, args: &'b Vec<OsString>) -> R
     ret.push(0); // NUL terminator
     Ok(ret)
 }
-
 
 fn append_arg<'a, 'b>(cmd: &'a mut Vec<u16>, arg: &'b OsString) -> Result<(), SandboxError> {
     let arg = enforce_no_zero(arg)?;
@@ -105,19 +110,19 @@ fn append_arg<'a, 'b>(cmd: &'a mut Vec<u16>, arg: &'b OsString) -> Result<(), Sa
     Ok(())
 }
 
-
 fn enforce_no_zero(val: &OsString) -> Result<&OsStr, SandboxError> {
     let ret = OsStr::new(val);
     if ret.encode_wide().any(|b| b == 0) {
-        Err(SandboxError::JailSetup("nul byte found in value".to_string()))
+        Err(SandboxError::JailSetup(
+            "nul byte found in value".to_string(),
+        ))
     } else {
         Ok(ret)
     }
 }
 
 fn requires_quoting(val: &OsStr) -> bool {
-    val.is_empty() || 
-    val.encode_wide().any(char_requires_quoting)
+    val.is_empty() || val.encode_wide().any(char_requires_quoting)
 }
 
 fn char_requires_quoting(b: u16) -> bool {
@@ -155,7 +160,8 @@ mod tests {
         let block = encode_env_strings(&[
             (OsString::from("FOO"), OsString::from("BAR")),
             (OsString::from("BAZ"), OsString::from("QUX")),
-        ]).expect("encoding should succeed");
+        ])
+        .expect("encoding should succeed");
 
         // Sorted order: BAZ, FOO
         assert_eq!(block, join_env_block(&["BAZ=QUX", "FOO=BAR"]));
@@ -167,26 +173,30 @@ mod tests {
             (OsString::from("foo"), OsString::from("lower")),
             (OsString::from("Bar"), OsString::from("mixed")),
             (OsString::from("BAZ"), OsString::from("upper")),
-        ]).expect("encoding should succeed");
+        ])
+        .expect("encoding should succeed");
         // Sorted order: Bar, BAZ, foo
-        assert_eq!(block, join_env_block(&["Bar=mixed", "BAZ=upper", "foo=lower"]));
+        assert_eq!(
+            block,
+            join_env_block(&["Bar=mixed", "BAZ=upper", "foo=lower"])
+        );
     }
 
     #[test]
     fn encode_env_strings_error_key_with_equal() {
         // While allowed, it's not good.
-        let block = encode_env_strings(&[
-            (OsString::from("=C:"), OsString::from("VAL")),
-        ]).unwrap();
+        let block = encode_env_strings(&[(OsString::from("=C:"), OsString::from("VAL"))]).unwrap();
         assert_eq!(block, join_env_block(&["=C:=VAL"]));
     }
 
     #[test]
     fn encode_env_strings_error_value_with_nul() {
         // Value contains an interior NUL
-        let err = encode_env_strings(&[
-            (OsString::from("KEY"), OsString::from_wide(&[b'X' as u16, 0, b'Y' as u16])),
-        ]).unwrap_err();
+        let err = encode_env_strings(&[(
+            OsString::from("KEY"),
+            OsString::from_wide(&[b'X' as u16, 0, b'Y' as u16]),
+        )])
+        .unwrap_err();
         match err {
             SandboxError::JailSetup(msg) => {
                 assert!(msg.contains("nul byte"));
@@ -198,9 +208,11 @@ mod tests {
     #[test]
     fn encode_env_strings_error_key_with_nul() {
         // Key contains an interior NUL
-        let err = encode_env_strings(&[
-            (OsString::from_wide(&[b'X' as u16, 0, b'Y' as u16]), OsString::from("VAL")),
-        ]).unwrap_err();
+        let err = encode_env_strings(&[(
+            OsString::from_wide(&[b'X' as u16, 0, b'Y' as u16]),
+            OsString::from("VAL"),
+        )])
+        .unwrap_err();
         match err {
             SandboxError::JailSetup(msg) => {
                 assert!(msg.contains("nul byte"), "unexpected error: {:?}", msg);
@@ -253,7 +265,7 @@ mod tests {
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
         // Expect the trailing backslash to be doubled inside quotes
-        assert_eq!(s, "prog.exe \"a b\\\\\"\0" );
+        assert_eq!(s, "prog.exe \"a b\\\\\"\0");
     }
 
     #[test]
@@ -270,11 +282,17 @@ mod tests {
     #[test]
     fn quote_arguments_internal_backslashes() {
         let cmd = OsStr::new("pr og.exe");
-        let args = vec![OsString::from("\\some\\directory with\\spaces"), OsString::from("argument2")];
+        let args = vec![
+            OsString::from("\\some\\directory with\\spaces"),
+            OsString::from("argument2"),
+        ];
         let out = quote_arguments(cmd, &args).expect("quoting should succeed");
         let s = utf16_to_string(&out);
 
-        assert_eq!(s, "\"pr og.exe\" \"\\some\\directory with\\spaces\" argument2\0");
+        assert_eq!(
+            s,
+            "\"pr og.exe\" \"\\some\\directory with\\spaces\" argument2\0"
+        );
     }
 
     #[test]
