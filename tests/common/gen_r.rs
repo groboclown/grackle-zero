@@ -122,6 +122,7 @@ fn base_restrictions() -> Restrictions {
         linux: linux::LinuxRestrictions {
             max_open_files: 20,
             secomp_kill: false,
+            dev_null_accessible: true,
         },
         windows: windows::WindowsRestrictions {
             app_container: windows::AppContainerMode::Disabled,

@@ -44,7 +44,10 @@ pub fn launch_child(env: LaunchEnv) -> Result<LinuxChild, SandboxError> {
     // > a call of `execve(2)`. Note that memory allocation may **not** be
     // > async-signal-safe and thus must be prevented.
     let exec_path = which::which(&env.cmd)?;
-    let sandbox = LandlockJail::new(&extract_dependencies(find_bin_dependencies(&exec_path))?)?;
+    let sandbox = LandlockJail::new(
+        &extract_dependencies(find_bin_dependencies(&exec_path))?,
+        &env.restrictions,
+    )?;
     let fd_set = ForkedFd::new(env.fds)?;
     let exec_path = CString::new(exec_path.as_os_str().as_bytes())?;
     let exec_path = exec_path.as_c_str();
@@ -251,6 +254,13 @@ impl LinuxChildState {
                         *k = true;
                         *c = Some(ec);
                         ExitCode::Exited(ec)
+                    }
+                    Ok(WaitStatus::Signaled(_pid, sig, _was_core_dump)) => {
+                        *k = true;
+                        *c = Some(-1);
+                        ExitCode::OsError(OsTermination {
+                            message: sig.as_str().to_string(), code: 1, subcode: None,
+                        })
                     }
                     Ok(_) => {
                         // Still alive

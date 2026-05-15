@@ -102,12 +102,13 @@ mod tests {
     }
 }
 
-pub mod linux {
 
+pub mod linux {
     pub fn compatible_linux_restrictions() -> LinuxRestrictions {
         LinuxRestrictions {
             max_open_files: 2048,
             secomp_kill: false,
+            dev_null_accessible: true,
         }
     }
 
@@ -115,16 +116,26 @@ pub mod linux {
         LinuxRestrictions {
             max_open_files: 2048,
             secomp_kill: false,
+            dev_null_accessible: true,
         }
     }
 
     /// Linux specific restrictions.
     #[derive(Debug, Clone, PartialEq)]
     pub struct LinuxRestrictions {
+        /// "rlimit".
         pub max_open_files: u64,
 
         /// Kill processes on a seccomp violation, rather than just returning an error from the syscall.
         pub secomp_kill: bool,
+
+        /// If the execution closes any of stdin, stdout, or stderr, some programs will
+        /// try to open /dev/null to use as a replacement for the closed file descriptor
+        /// (Rust's usual startup code will do this).
+        /// Because of this behavior, the program needs write access to /dev/null to keep
+        /// from triggering a SIGSEGV.  In order to prevent this from happening, the Linux
+        /// runtime will grant /dev/null read and write access to the process.
+        pub dev_null_accessible: bool,
     }
 
     /// Create a default AppContainer restriction structure.
