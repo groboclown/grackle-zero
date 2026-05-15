@@ -27,7 +27,9 @@ ifeq ($(OS),Windows_NT)
   ifeq ($(CC),cl)
     # Microsoft compiler.
     OUTDIR = target\debug
-    MKDIR_P = if not exist $(OUTDIR) mkdir $(OUTDIR)
+    # make runs a bash interpreter.
+    # MKDIR_P = if not exist $(OUTDIR) mkdir $(OUTDIR)
+    MKDIR_P = mkdir -p $(OUTDIR)
     RM = del /Q
 	OBJ = .obj
 	CFLAGS ?= /nologo /W4 /O2 /GS-
