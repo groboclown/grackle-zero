@@ -17,7 +17,7 @@
 PROGRAM = simple-c
 SRC = main.c
 
-CC ?= cc
+# CC ?= cc
 
 # Detect platform.
 ifeq ($(OS),Windows_NT)
