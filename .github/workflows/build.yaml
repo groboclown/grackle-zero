@@ -44,8 +44,13 @@ jobs:
       - name: Set up Rust
         run: rustup update
 
+      - name: Add Visual Studio project with MSBuild
+        shell: cmd 
+        run: ${{ '"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" && msbuild' }}
+        working-directory: 'D:/a/grackle-zero/grackle-zero'
+
       # Common Build
       - name: Build
-        # run: make CC=cl
+        run: make CC=cl
         # run: make CC=clang
-        run: make 
+        # run: make 
