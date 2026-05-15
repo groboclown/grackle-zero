@@ -47,4 +47,5 @@ jobs:
       # Common Build
       - name: Build
         # run: make CC=cl
-        run: make CC=clang
+        # run: make CC=clang
+        run: make 
