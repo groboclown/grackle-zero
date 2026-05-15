@@ -79,7 +79,7 @@ $(OUTDIR)/main$(OBJ): $(SRC) $(OUTDIR)
 	$(COMPILE)
 
 $(OUTDIR):
-  $(MKDIR_P)
+	$(MKDIR_P)
 
 clean:
 	-$(RM) $(TARGET) $(OBJECTS)
