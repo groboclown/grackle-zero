@@ -34,7 +34,7 @@ ifeq ($(OS),Windows_NT)
 	OBJ = .obj
 	CFLAGS ?= /nologo /W4 /O2 /GS-
 	LDFLAGS ?= /link /nologo /subsystem:console /entry:entry /nodefaultlib kernel32.lib
-	COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
+	COMPILE = $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
 	LINK = $(CC) /Fe$@ $^ $(LDFLAGS)
 
   else
@@ -45,7 +45,7 @@ ifeq ($(OS),Windows_NT)
     OBJ = .o
     CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
     LDFLAGS ?= -nostdlib -Wl,--subsystem,console -Wl,--entry=entry -lkernel32
-    COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) -c -o $@ $(SRC)
+    COMPILE = $(CC) $(CFLAGS) -c -o $@ $(SRC)
     LINK = $(CC) -o $@ $^ $(LDFLAGS)
   endif
 
@@ -63,7 +63,7 @@ else
   endif
   RM = rm -f
   MKDIR_P = mkdir -p $(OUTDIR)
-  COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) -c -o $@ $(SRC)
+  COMPILE = $(CC) $(CFLAGS) -c -o $@ $(SRC)
   LINK = $(CC) -o $@ $^ $(LDFLAGS)
 endif
 
@@ -75,8 +75,11 @@ all: $(TARGET)
 $(TARGET): $(OBJECTS)
 	$(LINK)
 
-$(OUTDIR)/main$(OBJ): $(SRC)
+$(OUTDIR)/main$(OBJ): $(SRC) $(OUTDIR)
 	$(COMPILE)
+
+$(OUTDIR):
+  $(MKDIR_P)
 
 clean:
 	-$(RM) $(TARGET) $(OBJECTS)
