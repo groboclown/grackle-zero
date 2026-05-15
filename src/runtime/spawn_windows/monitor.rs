@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: MIT
 
-use std::sync::{Arc, Mutex};
+use crate::runtime::spawn::{ExitCode, OsTermination};
+
+use super::jail::ProcessInfo;
+use std::{
+    ptr::null,
+    sync::{Arc, Mutex},
+};
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE, STILL_ACTIVE},
-        System::{JobObjects::TerminateJobObject, Threading::GetExitCodeProcess},
+        Foundation::{self, CloseHandle, HANDLE},
+        System::{
+            Diagnostics, JobObjects::TerminateJobObject, LibraryLoader,
+            Threading::GetExitCodeProcess,
+        },
     },
     core,
 };
-use super::jail::ProcessInfo;
-
 
 /// Allows monitoring the state of the launched process.
 #[derive(Clone)]
@@ -58,36 +65,127 @@ impl ProcessState {
     }
 
     /// Get the exit code for the process, or None if it hasn't exited yet.
-    pub fn exit_code(&self) -> Result<Option<u32>, std::io::Error> {
+    pub fn exit_code(&self) -> Result<ExitCode, std::io::Error> {
         let mut guard = self
             .mutable
             .lock()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "lock poisoned"))?;
-        match (*guard).exit_code {
-            Some(c) => Ok(Some(c)),
+        match &(*guard).exit_code {
+            Some(c) => Ok(c.clone()),
             None => {
-                let code = self.inner_exit_code()
+                let code = self
+                    .inner_exit_code()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e))?;
-                (*guard).exit_code = code.clone();
+                match &code {
+                    // Don't capture the Running state.
+                    ExitCode::Running => (),
+                    _ => {
+                        (*guard).exit_code = Some(code.clone());
+                    }
+                }
                 Ok(code)
             }
         }
     }
 
-    fn inner_exit_code(&self) -> core::Result<Option<u32>> {
+    fn inner_exit_code(&self) -> core::Result<ExitCode> {
         unsafe {
             let mut code = 0u32;
             GetExitCodeProcess(self.info.process, &mut code)?;
-
-            if code == STILL_ACTIVE.0 as u32 {
-                Ok(None)
-            } else {
-                Ok(Some(code))
-            }
+            Ok(Self::from_code(code))
         }
+    }
+
+    fn from_code(code: u32) -> ExitCode {
+        let mut buffer: Vec<u16> = vec![0; FORMAT_MESSAGE_BUFFER_SIZE];
+        let m_null: *mut ::core::ffi::c_void = null::<()>() as *mut ::core::ffi::c_void;
+
+        if code > i32::MAX as u32 {
+            // Try ntdll.dll, as that stores these larger exit codes.
+            unsafe {
+                // Try ntdll.dll first (direct NTSTATUS lookup)
+                let module: Foundation::HMODULE = match LibraryLoader::GetModuleHandleW(
+                    core::PCWSTR(windows::core::w!("ntdll.dll").as_ptr()),
+                ) {
+                    Ok(m) => m,
+                    Err(_) => Foundation::HMODULE(m_null),
+                };
+
+                if module.0 != m_null {
+                    let len = Diagnostics::Debug::FormatMessageW(
+                        Diagnostics::Debug::FORMAT_MESSAGE_FROM_HMODULE
+                            | Diagnostics::Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
+                        Some(module.0 as *const ::core::ffi::c_void),
+                        code,
+                        0,
+                        core::PWSTR(buffer.as_mut_ptr()),
+                        FORMAT_MESSAGE_BUFFER_SIZE as u32,
+                        None,
+                    );
+                    if len > 0 {
+                        return ExitCode::OsError(OsTermination {
+                            message: String::from_utf16_lossy(&buffer[..len as usize])
+                                .trim()
+                                .to_string(),
+                            code: code as i64,
+                            subcode: None,
+                        });
+                    }
+                }
+            }
+            return ExitCode::OsError(OsTermination {
+                message: format!("Process failed with OS error code 0x{:X}", code),
+                code: code as i64,
+                subcode: None,
+            });
+        }
+
+        // Everything else deals with a 32 bit exit code.
+
+        let icode = code as i32;
+        if icode == Foundation::STILL_ACTIVE.0 {
+            return ExitCode::Running;
+        }
+        if icode < Foundation::STILL_ACTIVE.0 {
+            return ExitCode::Exited(icode);
+        }
+
+        // Try NTSTATUS as a Win32 error
+        let win32_err = unsafe { Foundation::RtlNtStatusToDosError(Foundation::NTSTATUS(icode)) };
+
+        let len = unsafe {
+            Diagnostics::Debug::FormatMessageW(
+                Diagnostics::Debug::FORMAT_MESSAGE_FROM_SYSTEM
+                    | Diagnostics::Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
+                None,
+                win32_err,
+                0,
+                core::PWSTR(buffer.as_mut_ptr()),
+                FORMAT_MESSAGE_BUFFER_SIZE as u32,
+                None,
+            )
+        };
+        if len > 0 {
+            return ExitCode::OsError(OsTermination {
+                message: String::from_utf16_lossy(&buffer[..len as usize])
+                    .trim()
+                    .to_string(),
+                code: icode as i64,
+                subcode: Some(win32_err as i64),
+            });
+        }
+
+        // If all else fails, return the raw code.
+        return ExitCode::OsError(OsTermination {
+            message: format!("Unknown error: 0x{:08X}", icode),
+            code: icode as i64,
+            subcode: Some(win32_err as i64),
+        });
     }
 }
 
+// Max message size recommended by Microsoft docs
+const FORMAT_MESSAGE_BUFFER_SIZE: usize = 2048;
 
 impl Drop for ProcessState {
     fn drop(&mut self) {
@@ -114,8 +212,7 @@ impl Drop for ProcessState {
     }
 }
 
-
 struct MutableProcessState {
     terminated: bool,
-    exit_code: Option<u32>,
+    exit_code: Option<ExitCode>,
 }

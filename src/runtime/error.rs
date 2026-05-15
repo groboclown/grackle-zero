@@ -13,6 +13,13 @@ pub enum SandboxError {
 
 impl Display for SandboxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("sandbox error: ")?;
+        match self {
+            Self::Io(e) => e.fmt(f),
+            Self::ProcessError(e) => f.write_str(e),
+            Self::JailSetup(s) => f.write_str(s),
+            Self::JailNotSupported(s) => f.write_str(s),
+        }?;
         f.write_str("sandbox error")
     }
 }

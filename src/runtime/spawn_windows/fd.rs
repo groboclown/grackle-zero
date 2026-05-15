@@ -6,10 +6,13 @@ use windows_result::HRESULT;
 use windows_sys::Win32::System::Console;
 
 use windows::Win32::{
-    Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, INVALID_HANDLE_VALUE, SetHandleInformation},
-    Security, System::{Pipes, Threading::GetCurrentProcess},
+    Foundation::{
+        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, FALSE, HANDLE, HANDLE_FLAG_INHERIT,
+        HANDLE_FLAGS, INVALID_HANDLE_VALUE, SetHandleInformation,
+    },
+    Security,
+    System::{Pipes, Threading::GetCurrentProcess},
 };
-
 
 pub struct WinFdSet {
     pub stdin: StdIoFd,
@@ -35,10 +38,14 @@ impl WinFdSet {
             StdIo::None => StdIoFd::None,
             StdIo::PassThrough => StdIoFd::Pipe(WinFd::from_std(2)?),
         };
-        Ok(WinFdSet { stdin, stdout, stderr, others })
+        Ok(WinFdSet {
+            stdin,
+            stdout,
+            stderr,
+            others,
+        })
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum StreamDirection {
@@ -67,20 +74,17 @@ pub struct StdIoSet {
 }
 
 pub enum StdIo {
-    None,         // don't use this fd
-    PassThrough,  // reuse the parent's handle
-    Pipe,         // use a pipe.
+    None,        // don't use this fd
+    PassThrough, // reuse the parent's handle
+    Pipe,        // use a pipe.
 }
 
 pub enum StdIoFd {
-    None,         // don't use this fd
-    Pipe(WinFd),  // use a pipe.
+    None,        // don't use this fd
+    Pipe(WinFd), // use a pipe.
 }
 
-
-
-const DEFAULT_BUFFER_SIZE: u32 = 0;  // use default buffer size
-
+const DEFAULT_BUFFER_SIZE: u32 = 0; // use default buffer size
 
 impl WinFd {
     /// Create the piped handles to represent the file descriptor.
@@ -98,10 +102,10 @@ impl WinFd {
 
         unsafe {
             Pipes::CreatePipe(
-                &mut read, // hReadPipe (writes to the variable)
-                &mut write, // hWritePipe (writes to the variable)
-                Some(&sa), // lpPipeAttributes (controls inheritability)
-                DEFAULT_BUFFER_SIZE,  // nSize (0 means use default)
+                &mut read,           // hReadPipe (writes to the variable)
+                &mut write,          // hWritePipe (writes to the variable)
+                Some(&sa),           // lpPipeAttributes (controls inheritability)
+                DEFAULT_BUFFER_SIZE, // nSize (0 means use default)
             )?;
         }
 
@@ -109,13 +113,23 @@ impl WinFd {
             StreamDirection::ToChild => {
                 allow_inheritable(read)?;
                 deny_inheritable(write)?;
-                Self { fd, direction, parent_handle: Some(write), child_handle: Some(read) }
-            },
+                Self {
+                    fd,
+                    direction,
+                    parent_handle: Some(write),
+                    child_handle: Some(read),
+                }
+            }
             StreamDirection::FromChild => {
                 allow_inheritable(write)?;
                 deny_inheritable(read)?;
-                Self { fd, direction, parent_handle: Some(read), child_handle: Some(write) }
-            },
+                Self {
+                    fd,
+                    direction,
+                    parent_handle: Some(read),
+                    child_handle: Some(write),
+                }
+            }
         })
     }
 
@@ -124,7 +138,12 @@ impl WinFd {
             0 => (StreamDirection::ToChild, Console::STD_INPUT_HANDLE),
             1 => (StreamDirection::FromChild, Console::STD_OUTPUT_HANDLE),
             2 => (StreamDirection::FromChild, Console::STD_ERROR_HANDLE),
-            _ => { return Err(windows::core::Error::new(HRESULT(0i32), "invalid standard i/o number")); },
+            _ => {
+                return Err(windows::core::Error::new(
+                    HRESULT(0i32),
+                    "invalid standard i/o number",
+                ));
+            }
         };
 
         // Duplicate the handle, and use that duplicated handle just like a WinFd.
@@ -132,21 +151,24 @@ impl WinFd {
         // rather than on the parent, which can cause problems if multiple sandboxes are
         // launched with different I/O requirements.
         let parent = unsafe { Console::GetStdHandle(std_handle) };
-        let null: *mut std::ffi::c_void = core::ptr::null::<*mut std::ffi::c_void>() as *mut std::ffi::c_void;
+        let null: *mut std::ffi::c_void =
+            core::ptr::null::<*mut std::ffi::c_void>() as *mut std::ffi::c_void;
         // Some environments don't have a console.
         if parent == null || parent == INVALID_HANDLE_VALUE.0 {
-            return Err(windows::core::Error::from_thread())
+            return Err(windows::core::Error::from_thread());
         }
         let mut child = HANDLE::default();
-        unsafe { DuplicateHandle(
-            GetCurrentProcess(), // source process
-            HANDLE(parent), // source handle
-            GetCurrentProcess(),  // target process (still this process, because inheritence will do its thang)
-            &mut child,  // target handle
-            0,  // desired access: 0 means same access as the source
-            true,  // inherit-handle: true, because the child may inherit it.
-            DUPLICATE_SAME_ACCESS,  // options
-        )? };
+        unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),   // source process
+                HANDLE(parent),        // source handle
+                GetCurrentProcess(), // target process (still this process, because inheritence will do its thang)
+                &mut child,          // target handle
+                0,                   // desired access: 0 means same access as the source
+                true,                // inherit-handle: true, because the child may inherit it.
+                DUPLICATE_SAME_ACCESS, // options
+            )?
+        };
         Ok(Self {
             fd,
             direction,
@@ -176,24 +198,30 @@ impl WinFd {
     // Takes the parent handle as a stream reader.
     pub fn as_reader(&mut self) -> Option<Box<dyn std::io::Read>> {
         let handle = match self.parent_handle.take() {
-            None => { return None; }
+            None => {
+                return None;
+            }
             Some(e) => e,
         };
         match self.direction {
             StreamDirection::ToChild => None,
-            StreamDirection::FromChild => Some(Box::new(unsafe { File::from_raw_handle(handle.0) }))
+            StreamDirection::FromChild => {
+                Some(Box::new(unsafe { File::from_raw_handle(handle.0) }))
+            }
         }
     }
 
     // Takes the parent handle as a stream writer.
     pub fn as_writer(&mut self) -> Option<Box<dyn std::io::Write>> {
         let handle = match self.parent_handle.take() {
-            None => { return None; }
+            None => {
+                return None;
+            }
             Some(e) => e,
         };
         match self.direction {
             StreamDirection::FromChild => None,
-            StreamDirection::ToChild => Some(Box::new(unsafe { File::from_raw_handle(handle.0) }))
+            StreamDirection::ToChild => Some(Box::new(unsafe { File::from_raw_handle(handle.0) })),
         }
     }
 }
@@ -217,13 +245,11 @@ impl Drop for WinFd {
     }
 }
 
-
 /// Prepare windows handle for inherting into the child sandbox.
 fn allow_inheritable(allow: HANDLE) -> windows::core::Result<()> {
     unsafe { SetHandleInformation(allow, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT)? };
     Ok(())
 }
-
 
 /// Prepare windows handle for NOT inherting into the child sandbox.
 fn deny_inheritable(deny: HANDLE) -> windows::core::Result<()> {

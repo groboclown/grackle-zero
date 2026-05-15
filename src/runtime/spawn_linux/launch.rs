@@ -6,14 +6,16 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::CString,
     os::unix::ffi::OsStrExt as _,
-    path::PathBuf, sync::{Arc, Mutex},
+    path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 use nix::sys::wait::WaitStatus;
 
 use crate::runtime::{
+    ExitCode,
     error::SandboxError,
-    spawn::{Child, LaunchEnv},
+    spawn::{Child, LaunchEnv, OsTermination},
     spawn_linux::{
         dependencies::find_bin_dependencies,
         fd::{FdMap, ForkedFd, StreamDirection},
@@ -108,8 +110,7 @@ pub fn launch_child(env: LaunchEnv) -> Result<LinuxChild, SandboxError> {
 
 impl Child for LinuxChild {
     fn terminate(&self) -> Result<(), std::io::Error> {
-        self.state.kill()
-            .and(Ok(()))
+        self.state.kill().and(Ok(()))
     }
 
     fn take_stream_from_child(&mut self, fd: u32) -> Option<Box<dyn std::io::Read>> {
@@ -132,7 +133,7 @@ impl Child for LinuxChild {
         }
     }
 
-    fn exit_status(&self) -> Option<i32> {
+    fn exit_status(&self) -> ExitCode {
         self.state.exit_code()
     }
 }
@@ -219,17 +220,17 @@ impl LinuxChildState {
         }
     }
 
-    pub(crate) fn exit_code(&self) -> Option<i32> {
+    pub(crate) fn exit_code(&self) -> ExitCode {
         let mut k = match self.killed.lock() {
             Ok(guard) => guard,
-            Err(_) => return None,
+            Err(_) => return ExitCode::Running, // poisoned lock; assume still running.
         };
         let mut c = match self.exit_code.lock() {
             Ok(guard) => guard,
-            Err(_) => return None,
+            Err(_) => return ExitCode::Running, // poisoned lock; assume still running.
         };
         match *c {
-            Some(code) => Some(code),
+            Some(code) => ExitCode::Exited(code),
             None => {
                 // FIXME if c is None, then perform a wait-pid.
                 match nix::sys::wait::waitpid(
@@ -240,42 +241,50 @@ impl LinuxChildState {
                     // this should never receive a PID if that's the case.
                     // It can also mean that this process doesn't have access, or some
                     // very weird state.
-                    Err(_) => {
-                        None
-                    },
+                    Err(err) => ExitCode::OsError(OsTermination {
+                        message: format!("waitpid failed: {}", err),
+                        code: 0,
+                        subcode: None,
+                    }),
                     Ok(WaitStatus::Exited(_pid, ec)) => {
                         // What we expect.
                         *k = true;
                         *c = Some(ec);
-                        Some(ec)
-                    },
+                        ExitCode::Exited(ec)
+                    }
                     Ok(_) => {
                         // Still alive
-                        None
+                        ExitCode::Running
                     }
                 }
             }
         }
     }
 
-    pub(crate) fn kill(&self) -> Result<i32, std::io::Error> {
-        let mut k = self.killed.lock()
+    pub(crate) fn kill(&self) -> Result<ExitCode, std::io::Error> {
+        let mut k = self
+            .killed
+            .lock()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
-        let mut ec = self.exit_code.lock()
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
+        let mut ec = self
+            .exit_code
+            .lock()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "lock poisoned"))?;
         if *k {
             match *ec {
-                Some(c) => return Ok(c),
-                None => return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "BUG: process already killed, but exit code not set",
-                )),
+                Some(c) => return Ok(ExitCode::Exited(c)),
+                None => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "BUG: process already killed, but exit code not set",
+                    ));
+                }
             }
         }
 
         // The child cannot listen to signals, so kill it hard.
         match nix::sys::signal::kill(self.pid, nix::sys::signal::Signal::SIGKILL) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => match e {
                 nix::errno::Errno::ESRCH => {
                     // The process is already dead.
@@ -287,7 +296,7 @@ impl LinuxChildState {
                         format!("failed terminating child {}: {:?}", self.pid, e),
                     ));
                 }
-            }
+            },
         };
 
         // Monitor the process until it dies.
@@ -307,26 +316,25 @@ impl LinuxChildState {
                 Err(r) => {
                     // Don't mark the process as killed.
                     // It might be an intermittent error?
-                    return Err(r.into())
-                },
+                    return Err(r.into());
+                }
                 Ok(WaitStatus::Exited(_pid, c)) => {
                     // What we expect.
                     *k = true;
                     *ec = Some(c);
-                    return Ok(c)
-                },
+                    return Ok(ExitCode::Exited(c));
+                }
                 Ok(WaitStatus::Signaled(_pid, _sig, _b)) => {
                     // The process was killed by a signal, keep waiting.
                     continue;
-                },
+                }
                 Ok(v) => {
                     // The kill didn't work, and the process is alive in some odd
                     // state.
                     return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other, format!(
-                        "unexpected wait status after killing child: {:?}",
-                        v
-                    )))
+                        std::io::ErrorKind::Other,
+                        format!("unexpected wait status after killing child: {:?}", v),
+                    ));
                 }
             }
         }
