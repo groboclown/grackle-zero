@@ -34,7 +34,7 @@ jobs:
         run: make
 
 
-  windows-build:
+  windows-clang-build:
     runs-on: windows-latest
     steps:
       # Boilerplate
@@ -47,7 +47,6 @@ jobs:
       - name: Set up Clang
         uses: egor-tensin/setup-clang@v2
         with:
-          version: 21.1.8
           platform: x64
 
       # Common Build
@@ -55,3 +54,18 @@ jobs:
         # run: make CC=cl
         run: make CC=clang
         # run: make 
+
+
+  windows-gcc-build:
+    runs-on: windows-latest
+    steps:
+      # Boilerplate
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Rust
+        run: rustup update
+      
+      # Common Build
+      - name: Build
+        run: make
