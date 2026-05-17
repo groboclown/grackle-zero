@@ -43,7 +43,9 @@ ifeq ($(OS),Windows_NT)
     OBJ = .o
 
     ifeq ($(CC),clang)
-      CFLAGS ?= -O2 -Wall -Wextra -ffreestanding -mguard=cf -Xclang -ehcontguard
+      # This target injects load-config CFG metadata explicitly in main.c.
+      # Keep compile flags freestanding and rely on linker CFG options.
+      CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
       LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,--subsystem,console -Wl,--entry=entry -Wl,/guard:cf -Wl,--no-guard-longjmp -lkernel32
     else
       CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
