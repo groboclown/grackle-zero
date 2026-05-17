@@ -16,4 +16,9 @@ format: .FORCE
 		$(MAKE) -C $$dir format; \
 	done
 
+update: .FORCE
+	for dir in $(SUBDIRS); do \
+		test -f $$dir/Cargo.toml && cargo update; \
+	done
+
 .FORCE:
