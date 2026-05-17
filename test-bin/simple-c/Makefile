@@ -1,4 +1,4 @@
-# Simple cross-compiler Makefile for fdrelay
+# Simple cross-compiler Makefile for simple-c
 #
 # Supports:
 #   - gcc
@@ -17,8 +17,6 @@
 PROGRAM = simple-c
 SRC = main.c
 
-# CC ?= cc
-
 # Detect platform.
 ifeq ($(OS),Windows_NT)
   # Windows
@@ -29,20 +27,28 @@ ifeq ($(OS),Windows_NT)
     OUTDIR = target\debug
     MKDIR_P = if not exist $(OUTDIR) mkdir $(OUTDIR)
     RM = del /Q
-	OBJ = .obj
-	CFLAGS ?= /nologo /W4 /O2 /GS-
-	LDFLAGS ?= /link /nologo /subsystem:console /entry:entry /nodefaultlib kernel32.lib
-	COMPILE = $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
-	LINK = $(CC) /Fe$@ $^ $(LDFLAGS)
+    OBJ = .obj
+    CFLAGS ?= /nologo /W4 /O2 /GS-
+    LDFLAGS ?= /link /nologo /subsystem:console /entry:entry /nodefaultlib kernel32.lib
+    COMPILE = $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
+    LINK = $(CC) /Fe$@ $^ $(LDFLAGS)
 
   else
-    # Expect MinGW compiler.
+    # Non-cl Windows toolchains.
     OUTDIR = target/debug
     MKDIR_P = mkdir -p $(OUTDIR)
     RM = rm -f
     OBJ = .o
     CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
-    LDFLAGS ?= -nostdlib -Wl,--subsystem,console -Wl,--entry=entry -lkernel32
+
+    ifeq ($(CC),clang)
+      # clang targeting the MSVC environment uses lld-link/link semantics.
+      LDFLAGS ?= -nostdlib -Wl,/subsystem:console -Wl,/entry:entry -lkernel32
+    else
+      # MinGW/GNU ld semantics.
+      LDFLAGS ?= -nostdlib -Wl,--subsystem,console -Wl,--entry,entry -lkernel32
+    endif
+
     COMPILE = $(CC) $(CFLAGS) -c -o $@ $(SRC)
     LINK = $(CC) -o $@ $^ $(LDFLAGS)
   endif

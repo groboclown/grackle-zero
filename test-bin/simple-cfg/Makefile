@@ -1,4 +1,4 @@
-# Simple cross-compiler Makefile for fdrelay
+# Simple cross-compiler Makefile for simple-cfg
 #
 # Supports:
 #   - gcc
@@ -18,8 +18,6 @@ PROGRAM = simple-cfg
 SRC = main.c
 MAKEFILE_DIR = $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-CC ?= cc
-
 # Detect platform.
 ifeq ($(OS),Windows_NT)
   # Windows
@@ -32,11 +30,11 @@ ifeq ($(OS),Windows_NT)
     OUTDIR = target\debug
     MKDIR_P = if not exist $(OUTDIR) mkdir $(OUTDIR)
     RM = del /Q
-	OBJ = .obj
-	CFLAGS ?= /nologo /W4 /O2 /GS- /guard:cf,longjmp
-	LDFLAGS ?= /link /nologo /subsystem:console /entry:entry /nodefaultlib kernel32.lib
-	COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
-	LINK = $(CC) /Fe$@ $^ $(LDFLAGS)
+    OBJ = .obj
+    CFLAGS ?= /nologo /W4 /O2 /GS- /guard:cf,longjmp
+    LDFLAGS ?= /link /nologo /subsystem:console /entry:entry /nodefaultlib kernel32.lib
+    COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
+    LINK = $(CC) /Fe$@ $^ $(LDFLAGS)
 
   else
     OUTDIR = target/debug
@@ -44,19 +42,13 @@ ifeq ($(OS),Windows_NT)
     RM = rm -f
     OBJ = .o
 
-    NEEDS_CC_CHECK = 1
-    ifneq ($(strip $(MAKECMDGOALS)),)
-      ifneq ($(filter clean,$(MAKECMDGOALS)),)
-        NEEDS_CC_CHECK = 0
-      endif
+    ifeq ($(CC),clang)
+      CFLAGS ?= -O2 -Wall -Wextra -ffreestanding -mguard=cf -Xclang -ehcontguard
+      LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,--subsystem,console -Wl,--entry=entry -Wl,/guard:cf -Wl,--no-guard-longjmp -lkernel32
+    else
+      CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
+      LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,--subsystem,console -Wl,--entry=entry -Wl,--guard-cf -Wl,--no-guard-longjmp -lkernel32
     endif
-    ifneq ($(NEEDS_CC_CHECK),0)
-      ifneq ($(CC),clang)
-        $(error simple-cfg requires CC=clang (LLVM) or CC=cl on Windows; GNU gcc/ld does not produce stable no-CRT CFG metadata for this target)
-      endif
-    endif
-    CFLAGS ?= -O2 -Wall -Wextra -ffreestanding -mguard=cf -Xclang -ehcontguard
-    LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,--subsystem,console -Wl,--entry=entry -Wl,/guard:cf -Wl,--no-guard-longjmp -lkernel32
     COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) -c -o $@ $(SRC)
     LINK = $(CC) -o $@ $^ $(LDFLAGS)
   endif
