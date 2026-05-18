@@ -10,7 +10,7 @@ This library executes other programs in a [zero-access sandbox](#limitations).  
 
 ### Deeper Dive
 
-Just wrapping the execution in an in-process virtual language (such as a JavaScript or Lua interpreter) does not guarantee that the code cannot perform malicious actions.  As the [Google Chrome security team discuss]([https://arxiv.org/pdf/1902.05178]), with the discovery of Sectre and Meltdown attacks,
+Just wrapping the execution in an in-process virtual language (such as a JavaScript or Lua interpreter) does not guarantee that the code cannot perform malicious actions.  As the [Google Chrome security team discuss](https://arxiv.org/pdf/1902.05178), with the discovery of Sectre and Meltdown attacks,
 
 > speculative vulnerabilities on today’s hardware defeat all language-enforced confidentiality with no known comprehensive software mitigations, as we have discovered that untrusted code can construct a universal read gadget to read all memory in the same address space through side-channels.  In the face of this reality, we have shifted the security model of the Chrome web browser and V8 to process isolation.
 
