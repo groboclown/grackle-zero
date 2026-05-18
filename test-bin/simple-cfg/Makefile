@@ -62,7 +62,7 @@ else
   LINK = echo "Skipping $(PROGRAM)"
   VERIFY = echo "Skipping verify"
   RUN_TARGET = echo "Skipping run"
-  MKDIR_P = mkdir -p $(OUTDIR)
+  MKDIR_P = echo "Skipping mkdir"
 endif
 
 TARGET = $(OUTDIR)/$(PROGRAM)$(EXE)

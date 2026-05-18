@@ -99,9 +99,7 @@ fn with_aslr_bottom_up_randomization_on(mut r: Restrictions) -> Restrictions {
 
 pub fn desktop_restrictions() -> Restrictions {
     let mut r = app_container_restrictions();
-    if let windows::AppContainerMode::Enabled(ac) = &mut r.windows.app_container {
-        ac.desktop_isolation = true;
-    }
+    r.windows.desktop_isolate = windows::DesktopIsolateMode::Enabled;
     r
 }
 
@@ -110,7 +108,6 @@ fn app_container_restrictions() -> Restrictions {
     r.windows.app_container = windows::AppContainerMode::Enabled(windows::AppContainer {
         name: APP_NAME.to_string(),
         capabilities: Vec::new(),
-        desktop_isolation: false,
         reuse_existing: true,
     });
     r
@@ -126,6 +123,7 @@ fn base_restrictions() -> Restrictions {
         },
         windows: windows::WindowsRestrictions {
             app_container: windows::AppContainerMode::Disabled,
+            desktop_isolate: windows::DesktopIsolateMode::Disabled,
             data_execution_prevention: windows::DataExecutionPreventionMode::Disabled,
             structured_exception_handler_overwrite_protection: windows::RestrictedAlwaysMode::Defer,
             aslr: windows::ASLRPolicy {

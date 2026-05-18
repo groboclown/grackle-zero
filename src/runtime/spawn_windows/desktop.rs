@@ -83,13 +83,9 @@ impl UiIsolate {
         restr: &restrictions::Restrictions,
         app_sid: Option<Rc<Box<dyn Sid>>>,
     ) -> Result<Self, WindowsSandboxError> {
-        let force_desktop_isolation = std::env::var_os("GRACKLE_FORCE_DESKTOP_ISOLATION")
-            .map(|v| v == "1")
-            .unwrap_or(false);
-        let (name, app_sid) = match &restr.windows.app_container {
-            restrictions::windows::AppContainerMode::Enabled(acp) => {
-                if !acp.desktop_isolation && !force_desktop_isolation {
-                    return Ok(Self {
+        let require_di = match restr.windows.desktop_isolate {
+            restrictions::windows::DesktopIsolateMode::Disabled => {
+                return Ok(Self {
                         desktop: DesktopIsolate {
                             name: None,
                             desktop: None,
@@ -100,7 +96,16 @@ impl UiIsolate {
                         },
                         desktop_path: None,
                     });
-                }
+            }
+            restrictions::windows::DesktopIsolateMode::Enabled => {
+                false
+            }
+            restrictions::windows::DesktopIsolateMode::Required => {
+                true
+            }
+        };
+        let (name, app_sid) = match &restr.windows.app_container {
+            restrictions::windows::AppContainerMode::Enabled(acp) => {
                 (
                     randomized_desktop_name(&acp.name)?,
                     app_sid.ok_or_else(|| {
@@ -109,19 +114,6 @@ impl UiIsolate {
                 )
             }
             restrictions::windows::AppContainerMode::Disabled => {
-                if !force_desktop_isolation {
-                    return Ok(Self {
-                        desktop: DesktopIsolate {
-                            name: None,
-                            desktop: None,
-                        },
-                        station: WindowStationIsolate {
-                            name: None,
-                            station: None,
-                        },
-                        desktop_path: None,
-                    });
-                }
                 (
                     randomized_desktop_name(&format!(
                         "gracklezero-desktop-{}",
@@ -154,16 +146,25 @@ impl UiIsolate {
             }
             unsafe { StationsAndDesktops::SetProcessWindowStation(station) }?;
             old_station = Some(os);
+        } else if require_di {
+            return Err(WindowsSandboxError::setup_message(
+                "could not construct required desktop isolate: window station isolate access denied",
+            ));
         }
-        let desktop_res = DesktopIsolate::new(&name, app_sid);
         // Before returning the error, switch back to the old station, otherwise the process might be left
         // without a window station, which would cause all UI operations to fail.
+        let desktop_res = DesktopIsolate::new(&name, app_sid);
         // Note that, if this itself fails, then the process is in a very bad state.
         // May want a specialized error just for this kind of case (UI in the parent process are now unable to work).
         if let Some(old_station) = old_station {
             unsafe { StationsAndDesktops::SetProcessWindowStation(old_station) }?;
         }
         let desktop = desktop_res?;
+        if require_di && desktop.desktop.is_none() {
+            return Err(WindowsSandboxError::setup_message(
+                "could not construct required desktop isolate: desktop isolate access denied",
+            ));
+        }
 
         let desktop = desktop;
         let desktop_path =
@@ -325,7 +326,19 @@ impl WindowStationIsolate {
                 sec_attribs.attributes(),
             )
         } {
-            Err(e) => Err(e.into()),
+            Err(e) => {
+                let e_code = e.code().0;
+                if e_code == windows::Win32::Foundation::E_ACCESSDENIED.0 {
+                    // This is fine in some contexts, such as an already restricted environment or
+                    // in a headless OS.
+                    Ok(WindowStationIsolate {
+                        name: None,
+                        station: None,
+                    })
+                } else {
+                    Err(e.into())
+                }
+            }
             Ok(station) => {
                 if station.0 == std::ptr::null_mut() {
                     Err(WindowsSandboxError::setup_message(

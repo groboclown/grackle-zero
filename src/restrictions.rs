@@ -47,7 +47,6 @@ mod tests {
             "test_app",
             |r| { linux::with_max_open_files(r, 4096) },
             linux::kill_process_on_seccomp_violation,
-            windows::disable_desktop_isolation,
             windows::disable_data_execution_prevention,
             (
                 windows::with_app_container_capability,
@@ -84,7 +83,6 @@ mod tests {
                 300,
             ),
             windows::disable_app_container,
-            windows::disable_desktop_isolation,
             windows::disable_data_execution_prevention,
             |r| {
                 windows::with_app_container_capability(r, windows::AppContainerCapability::Webcam)
@@ -164,6 +162,7 @@ pub mod windows {
     pub fn compatible_windows_restrictions(application_name: &String) -> WindowsRestrictions {
         WindowsRestrictions {
             app_container: default_app_container(application_name),
+            desktop_isolate: DesktopIsolateMode::Enabled,
             data_execution_prevention: DataExecutionPreventionMode::ThunkEmulation,
             structured_exception_handler_overwrite_protection: RestrictedAlwaysMode::AlwaysOn,
             aslr: default_aslr_policy(),
@@ -196,6 +195,7 @@ pub mod windows {
     pub fn strict_windows_restrictions(application_name: &String) -> WindowsRestrictions {
         WindowsRestrictions {
             app_container: default_app_container(application_name),
+            desktop_isolate: DesktopIsolateMode::Enabled,
             data_execution_prevention: DataExecutionPreventionMode::ThunkEmulation,
             structured_exception_handler_overwrite_protection: RestrictedAlwaysMode::AlwaysOn,
             aslr: default_aslr_policy(),
@@ -234,6 +234,11 @@ pub mod windows {
         /// If not given, this defaults to `true` (enabled).
         // Minimum OS: Windows Vista / Windows Server 2008
         pub app_container: AppContainerMode,
+
+        /// Creates a new desktop isolate for the runtime.
+        /// If the app_container is Disabled, then this isolate runs within the user's default
+        /// app container.
+        pub desktop_isolate: DesktopIsolateMode,
 
         // ================================================================
         // Windows Process Thread Restrictions.
@@ -367,14 +372,6 @@ pub mod windows {
         /// The capabilities to add to the AppContainer.  By default, no capabilities are added.
         pub capabilities: Vec<AppContainerCapability>,
 
-        /// If true, the AppContainer will be created with the "Desktop Isolation" capability, which prevents any
-        /// UI elements from the spawned program from interacting with the user's desktop.  This includes an isolated
-        /// clipboard, and no windows shown to the user.
-        /// TODO it's possible to create a desktop isolate within the user's default AppContainer.  This would
-        /// prevent the buildup of cruft that the user would need to deal with related to additional AppContainer objects on
-        /// the user's system.
-        pub desktop_isolation: bool,
-
         /// If true, the jail will reuse any existing AppContainer with the given name.
         /// If false, the jail will try to create a new AppContainer with the given name as a prefix.
         /// This will allow multiple processes to share the same AppContainer, and also avoid creating a new one on every execution.
@@ -405,20 +402,12 @@ pub mod windows {
         AppContainerMode::Enabled(AppContainer {
             name: application_name.clone(),
             capabilities: Vec::new(),
-            desktop_isolation: true,
             reuse_existing: true,
         })
     }
 
     pub fn disable_app_container(mut r: super::Restrictions) -> super::Restrictions {
         r.windows.app_container = AppContainerMode::Disabled;
-        r
-    }
-
-    pub fn disable_desktop_isolation(mut r: super::Restrictions) -> super::Restrictions {
-        if let AppContainerMode::Enabled(app_container) = &mut r.windows.app_container {
-            app_container.desktop_isolation = false;
-        }
         r
     }
 
@@ -438,6 +427,36 @@ pub mod windows {
         if let AppContainerMode::Enabled(app_container) = &mut r.windows.app_container {
             app_container.reuse_existing = false;
         }
+        r
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    /// Desktop Isolate setup.
+    /// A desktop isolate prevents UI elements from the spawned program to interact with the user's desktop.
+    /// This includes an isolated clipboard, and the user does not see the program's windows.
+    pub enum DesktopIsolateMode {
+        /// Creates a desktop isolate, and ignores any ACCESS_DENIED errors that can indicate this
+        /// runs within a limited-access environment.
+        Enabled,
+
+        /// Requires that the execution constructs a new desktop isolate, and fails on any error,
+        /// even those that indicate that the environment has no desktop environment.
+        Required,
+
+        /// Do not create a new desktop isolate for this to run in.
+        Disabled,
+    }
+
+    /// Require that the execution environment constructs a desktop isolate for Windows,
+    /// even if the environment already runs in a restricted environment (such as headless).
+    pub fn require_desktop_isolate(mut r: super::Restrictions) -> super::Restrictions {
+        r.windows.desktop_isolate = DesktopIsolateMode::Required;
+        r
+    }
+
+    /// Do not create a new desktop isolate for the execution environment.
+    pub fn disable_desktop_isolate(mut r: super::Restrictions) -> super::Restrictions {
+        r.windows.desktop_isolate = DesktopIsolateMode::Disabled;
         r
     }
 
