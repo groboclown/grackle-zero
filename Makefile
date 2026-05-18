@@ -33,9 +33,14 @@ clean: .FORCE
 test: test-bin .FORCE
 	$(CARGO) test
 
-##          test-serial: Run all the tests in serial.
+##   test-serial: Run all the tests in serial.
 test-serial: test-bin .FORCE
 	$(CARGO) test -- --test-threads=1
+
+##    test-debug: Run the tests serially with full output sent to
+##                stderr + full Rust backtrace.
+test-debug: test-bin .FORCE
+	RUST_BACKTRACE=full $(CARGO) test -- --nocapture --test-threads=1
 
 ##      test-bin: Compile the test binaries.
 ##                These binaries are used by the unit tests to ensure the
@@ -63,7 +68,7 @@ build-win: .FORCE
 	# If running from Linux, this requires installing mingw-w64-gcc
 	cargo build --target $(WINDOWS_TARGET)
 
-##     build-macos: Compile for MacOS (Darwin)
+##   build-macos: Compile for MacOS (Darwin)
 build-macos: .FORCE
 	cargo build --target $(DARWIN_TARGET)
 

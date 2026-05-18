@@ -23,17 +23,17 @@ ifeq ($(OS),Windows_NT)
   # Windows
   EXE = .exe
   VERIFY = @powershell -NoProfile -ExecutionPolicy Bypass -File "verify.ps1" "$(TARGET)"
-  RUN_TARGET = @powershell -NoProfile -ExecutionPolicy Bypass -Command "& '$(TARGET)'; exit \$$LASTEXITCODE"
+  RUN_TARGET = @powershell -NoProfile -ExecutionPolicy Bypass -Command "& '$(TARGET)' ; exit \$$LASTEXITCODE"
 
   ifeq ($(CC),cl)
     # Microsoft compiler.
     OUTDIR = target\debug
-    MKDIR_P = if not exist $(OUTDIR) mkdir $(OUTDIR)
+    MKDIR_P = @powershell -NoProfile -ExecutionPolicy Bypass -Command "& md '$(OUTDIR)' -ea 0" ; exit 0
     RM = del /Q
     OBJ = .obj
     CFLAGS ?= /nologo /W4 /O2 /GS- /guard:cf,longjmp
     LDFLAGS ?= /link /nologo /subsystem:console /entry:entry /nodefaultlib kernel32.lib
-    COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
+    COMPILE = $(CC) $(CFLAGS) /c /Fo$@ $(SRC)
     LINK = $(CC) /Fe$@ $^ $(LDFLAGS)
 
   else
@@ -43,15 +43,15 @@ ifeq ($(OS),Windows_NT)
     OBJ = .o
 
     ifeq ($(CC),clang)
-      # This target injects load-config CFG metadata explicitly in main.c.
+      # clang on Windows drives lld-link here, so use MSVC-style link flags.
       # Keep compile flags freestanding and rely on linker CFG options.
       CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
-      LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,--subsystem,console -Wl,--entry=entry -Wl,/guard:cf -Wl,--no-guard-longjmp -lkernel32
+      LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,/subsystem:console -Wl,/entry:entry -Wl,/guard:cf -lkernel32
     else
       CFLAGS ?= -O2 -Wall -Wextra -ffreestanding
       LDFLAGS ?= -nostdlib -fuse-ld=lld -Wl,--subsystem,console -Wl,--entry=entry -Wl,--guard-cf -Wl,--no-guard-longjmp -lkernel32
     endif
-    COMPILE = $(MKDIR_P) && $(CC) $(CFLAGS) -c -o $@ $(SRC)
+    COMPILE = $(CC) $(CFLAGS) -c -o $@ $(SRC)
     LINK = $(CC) -o $@ $^ $(LDFLAGS)
   endif
 
@@ -62,6 +62,7 @@ else
   LINK = echo "Skipping $(PROGRAM)"
   VERIFY = echo "Skipping verify"
   RUN_TARGET = echo "Skipping run"
+  MKDIR_P = mkdir -p $(OUTDIR)
 endif
 
 TARGET = $(OUTDIR)/$(PROGRAM)$(EXE)
@@ -72,6 +73,7 @@ $(TARGET): $(OBJECTS)
 	$(LINK)
 
 $(OUTDIR)/main$(OBJ): $(SRC)
+	$(MKDIR_P)
 	@echo "Compiling"
 	$(COMPILE)
 
