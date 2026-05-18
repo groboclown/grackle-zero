@@ -1,0 +1,6 @@
+# Some Windows environments encounter crashes when running with gcc tools.
+# Switching over to clang tools does not have the same issue.
+
+[target.x86_64-pc-windows-gnu]
+linker = "rust-lld"
+rustflags = ["-Clink-self-contained=yes"]

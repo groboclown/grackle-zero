@@ -137,6 +137,11 @@ mod tests {
             )
             .unwrap();
         let data = &out.get_ref()[..out.position() as usize];
-        assert!(data.eq(&ZERO_SIZE_EVENT[0..HEADER_LEN]), "found: {:02X?}, expected: {:02X?}", data, &ZERO_SIZE_EVENT[0..HEADER_LEN]);
+        assert!(
+            data.eq(&ZERO_SIZE_EVENT[0..HEADER_LEN]),
+            "found: {:02X?}, expected: {:02X?}",
+            data,
+            &ZERO_SIZE_EVENT[0..HEADER_LEN]
+        );
     }
 }

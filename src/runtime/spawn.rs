@@ -25,7 +25,29 @@ pub trait Child {
     fn take_stream_to_child(&mut self, fd: u32) -> Option<Box<dyn std::io::Write>>;
 
     /// Get the current exit status for the child process.
-    fn exit_status(&self) -> Option<i32>;
+    /// NOTE: OS may have its own error codes in here to indicate some extra-process failure.
+    /// For example, in Windows, an exit code of 0xC0000142 (STATUS_DLL_INIT_FAILED) indicates that
+    /// the process failed to load necessary DLLs.
+    /// TODO: this should instead return a richer enum that can distinguish between an actual
+    /// exit code and an OS error code.
+    fn exit_status(&self) -> ExitCode;
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitCode {
+    /// The process exited with the given code.
+    Exited(i32),
+    /// The process is still running.
+    Running,
+    /// The process failed to start due to an OS error, with the given code.
+    OsError(OsTermination),
+}
+
+#[derive(Debug, Clone)]
+pub struct OsTermination {
+    pub message: String,
+    pub code: i64,
+    pub subcode: Option<i64>,
 }
 
 /// Defines the required file descriptors used in the construction of the child process.
@@ -108,7 +130,11 @@ impl FdSet {
 pub struct LaunchEnv {
     pub cmd: PathBuf,
     pub args: Vec<OsString>,
-    pub cwd: PathBuf,
     pub env: HashMap<OsString, OsString>,
     pub fds: FdSet,
+    pub restrictions: crate::Restrictions,
+
+    // TODO even the `cwd` looks suspiciously like something the library should handle, to construct
+    // something that's safe for use and has correct, safe permissions.
+    pub cwd: PathBuf,
 }

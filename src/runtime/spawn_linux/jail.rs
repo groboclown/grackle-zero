@@ -1,31 +1,31 @@
 // SPDX-License-Identifier: MIT
 
 //! Set up the jail from within the child process.
-//! 
+//!
 //! Items implemented:
-//! 
+//!
 //! ### Landlock
-//! 
+//!
 //! This uses the Linux-specific 'landlock' capability, which allows the
 //! child process to declare its restrictions.
 //! Due to the way it works, a restriction cannot be undone, therefore we
 //! can add a full-on set of restrictions to get everything locked down as much
 //! as possible.
 //! It has an [official website](https://landlock.io/).
-//! 
+//!
 //! ### Namespaces
-//! 
+//!
 //! (not present)
-//! 
+//!
 //! ### rlimits
-//! 
+//!
 //! Limit the number of open files.  Currently, this is hard coded to 2048.
-//! 
+//!
 //! ### seccomp
-//! 
+//!
 //! Defaults to deny access, with a list of allowed syscalls in the call_names
 //! file.
-//! 
+//!
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -34,11 +34,11 @@ use landlock::{
     ABI, Access, AccessFs, AccessNet, Compatible, LandlockStatus, Ruleset, RulesetAttr,
     RulesetCreatedAttr, Scope, path_beneath_rules,
 };
-use nix::sys::resource::{setrlimit, Resource, rlim_t};
 use nix::sys::prctl::set_no_new_privs;
+use nix::sys::resource::{Resource, rlim_t, setrlimit};
 
 use crate::runtime::error::SandboxError;
-
+use crate::restrictions::Restrictions;
 
 /// A structure that allows for easy execution of the sandbox mode.
 /// Intended to be constructed before entering the fork, in order to
@@ -49,17 +49,27 @@ pub struct LandlockJail {
     max_open_files: u64,
 }
 
-impl LandlockJail {
-    pub fn new(allowed_read_paths: &Vec<PathBuf>) -> Result<Self, SandboxError> {
-        Ok(LandlockJail {
-            ruleset: new_sandbox(allowed_read_paths)
-                .map_err(|e| SandboxError::JailSetup(e.to_string()))?,
-            seccomp: setup_seccomp()
-                .map_err(|e| SandboxError::JailSetup(e.to_string()))?,
+const DEV_NULL_PATH: &str = "/dev/null";
 
-            // Set a reasonable limit on open files.
-            // This is necessary due to loading the files for the executable.
-            max_open_files: 2048,
+impl LandlockJail {
+    pub fn new(
+        allowed_read_paths: &Vec<PathBuf>,
+        restrictions: &Restrictions,
+    ) -> Result<Self, SandboxError> {
+        let mut allowed_read_paths = allowed_read_paths.clone();
+        let mut allowed_write_paths: Vec<PathBuf> = Vec::new();
+        if restrictions.linux.dev_null_accessible {
+            let dev_null: PathBuf = DEV_NULL_PATH.into();
+            allowed_read_paths.push(dev_null.clone());
+            allowed_write_paths.push(dev_null);
+        }
+
+        Ok(LandlockJail {
+            ruleset: new_sandbox(&allowed_read_paths, &allowed_write_paths)
+                .map_err(|e| SandboxError::JailSetup(e.to_string()))?,
+            seccomp: setup_seccomp(restrictions.linux.secomp_kill)
+                .map_err(|e| SandboxError::JailSetup(e.to_string()))?,
+            max_open_files: restrictions.linux.max_open_files,
         })
     }
 
@@ -68,17 +78,17 @@ impl LandlockJail {
     /// it will exit on error.  And, because the expectation is that
     /// all I/O is already constrained due to FD wiggling, it reports no
     /// logging information.
-    /// 
+    ///
     /// Note: landlock works by allocating an FD that contains the ruleset.
     /// That means the child must wait to close FDs until after the restriction is applied.
     pub fn restrict(self) {
-        
         // rlimits
         setrlimit(
             Resource::RLIMIT_NOFILE,
             self.max_open_files as rlim_t,
-            self.max_open_files as rlim_t)
-            .unwrap_or_else(|_| exit_err());
+            self.max_open_files as rlim_t,
+        )
+        .unwrap_or_else(|_| exit_err());
 
         // no_new_privs is required for seccomp.  Should be done before landlock.
         set_no_new_privs().unwrap_or_else(|_| exit_err());
@@ -113,7 +123,7 @@ impl LandlockJail {
                 } => (),
             },
         }
-        
+
         // install seccomp filter after landlock.
         // That way, we don't need to add landlock rules to seccomp.
         self.seccomp.load().unwrap_or_else(|_| exit_err());
@@ -127,13 +137,14 @@ fn exit_err() {
 /// Set the sandbox mode using low-level errors.
 fn new_sandbox(
     allowed_read_paths: &Vec<PathBuf>,
+    allowed_write_paths: &Vec<PathBuf>,
 ) -> Result<landlock::RulesetCreated, landlock::RulesetError> {
-    let mut paths = Vec::new();
-    paths.extend(allowed_read_paths.iter());
+    let read_paths: Vec<PathBuf> = allowed_read_paths.clone();
+    let write_paths: Vec<PathBuf> = allowed_write_paths.clone();
 
     let abi_min = ABI::V1;
     let abi_latest = ABI::V6;
-    Ruleset::default()
+    let mut ruleset = Ruleset::default()
         // Hard requirements:
         //   - no read or write access to any file (this will be softened later).
         .set_compatibility(landlock::CompatLevel::HardRequirement)
@@ -149,27 +160,38 @@ fn new_sandbox(
         //   - no TCP binding or connecting to TCP (ABI >=4).
         .handle_access(AccessNet::from_all(abi_latest))?
         // Finish up the set of restrictions.
-        .create()?
-        // Prepare what is allowed - reading the allowed paths.
-        .add_rules(path_beneath_rules(paths, AccessFs::from_read(abi_min)))
+        .create()?;
+
+    if read_paths.len() > 0 {
+        ruleset = ruleset
+            // Prepare what is allowed - reading the allowed paths.
+            .add_rules(path_beneath_rules(read_paths, AccessFs::from_read(abi_min)))?;
+    }
+    if write_paths.len() > 0 {
+        ruleset = ruleset
+            .add_rules(path_beneath_rules(write_paths, AccessFs::from_write(abi_min)))?;
+    }
+
+    Ok(ruleset)
 }
 
 /// Set up seccomp filtering to limit syscalls.
-fn setup_seccomp() -> Result<libseccomp::ScmpFilterContext, libseccomp::error::SeccompError> {
+fn setup_seccomp(violation_kills: bool) -> Result<libseccomp::ScmpFilterContext, libseccomp::error::SeccompError> {
     use libseccomp::*;
 
     // This uses deny-by-default.  While "kill" may be preferred,
     // landlock doesn't do that, so for the actions that are allowed but
     // limited, it will return EPERM.  So, use EPERM for the moment.  We may
     // revisit this decision later.
+    let mut violation_action = ScmpAction::Errno(nix::libc::EPERM);
+    if violation_kills {
+        violation_action = ScmpAction::KillProcess;
+    }
+    // for debugging
+    // violation_action = ScmpAction::Log;
 
     let mut ctx = ScmpFilterContext::new(
-        // eventually look at moving to ScmpAction::KillProcess
-        // ScmpAction::KillProcess,
-        ScmpAction::Errno(nix::libc::EPERM),
-
-        // for debugging
-        // ScmpAction::Log,
+        violation_action,
     )?;
 
     for name in super::call_names::ALLOW_LIST.iter() {
@@ -178,7 +200,11 @@ fn setup_seccomp() -> Result<libseccomp::ScmpFilterContext, libseccomp::error::S
                 ctx.add_rule(ScmpAction::Allow, syscall)?;
             }
             Err(_) => {
-                let _ = writeln!(&mut std::io::stderr(), "OS does not support syscall {}", name);
+                let _ = writeln!(
+                    &mut std::io::stderr(),
+                    "OS does not support syscall {}",
+                    name
+                );
             }
         }
     }
@@ -195,7 +221,7 @@ mod tests {
     #[test]
     fn test_landlock_jail() {
         let allowed_paths = vec![PathBuf::from("/tmp"), PathBuf::from("/var/log")];
-        let jail = new_sandbox(&allowed_paths);
+        let jail = new_sandbox(&allowed_paths, &vec![]);
         assert!(jail.is_ok());
     }
 }

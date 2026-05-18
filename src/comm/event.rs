@@ -27,6 +27,7 @@ const _HEADER_PAYLOAD_POS_START: usize = _HEADER_SIZE_POS_END;
 
 /// The full event packet.
 /// The payload length must match the header's size value.
+/// This reads the full event packet into memory.
 pub struct EventPacket {
     pub header: EventPacketHeader,
     pub payload: Vec<u8>,

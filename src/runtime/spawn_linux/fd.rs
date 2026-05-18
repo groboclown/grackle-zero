@@ -3,7 +3,9 @@
 //! Construct file descriptors for the passing between the parent and child processes.
 
 use std::{
-    collections::HashSet, fs::File, os::fd::{AsRawFd, OwnedFd, RawFd}
+    collections::HashSet,
+    fs::File,
+    os::fd::{AsRawFd, OwnedFd, RawFd},
 };
 
 use nix::{libc::dup2, unistd::pipe};
@@ -38,7 +40,7 @@ impl ForkedFd {
 
         for fd_m in config.modes() {
             match fd_m.mode {
-                crate::runtime::spawn::FdMode::Null => {},
+                crate::runtime::spawn::FdMode::Null => {}
                 crate::runtime::spawn::FdMode::KeepInChild => {
                     // Keep the FD open in the child without redirection.
                     keep_fds.insert(fd_m.fd as nix::libc::c_int);
@@ -147,8 +149,8 @@ mod tests {
     use super::*;
     use crate::runtime::spawn::{Fd, FdMode, FdSet};
     use nix::libc;
-    use nix::sys::wait::{waitpid, WaitStatus};
-    use nix::unistd::{fork, ForkResult, Pid};
+    use nix::sys::wait::{WaitStatus, waitpid};
+    use nix::unistd::{ForkResult, Pid, fork};
     use std::fs::File;
     use std::io::{Read, Write};
     use std::os::fd::FromRawFd;
@@ -159,9 +161,18 @@ mod tests {
         // Build an FdSet with mixed modes including Null.
         // Make sure the FDs aren't consecutive.
         let fds = FdSet::from_vec(vec![
-            Fd { fd: 5, mode: FdMode::ToChild },
-            Fd { fd: 7, mode: FdMode::Null },
-            Fd { fd: 12, mode: FdMode::FromChild },
+            Fd {
+                fd: 5,
+                mode: FdMode::ToChild,
+            },
+            Fd {
+                fd: 7,
+                mode: FdMode::Null,
+            },
+            Fd {
+                fd: 12,
+                mode: FdMode::FromChild,
+            },
         ]);
 
         // Create forked fds, then simulate the parent path to collect streams.
@@ -179,13 +190,15 @@ mod tests {
 
         assert_eq!(maps[1].dup_to, 12);
         matches_direction(&maps[1], StreamDirection::FromChild);
-
     }
 
     /// Test data flowing through stdin to the child process.
     #[test]
     fn to_child_data_flow_via_stdin() {
-        let fds = FdSet::from_vec(vec![Fd { fd: 0, mode: FdMode::ToChild }]);
+        let fds = FdSet::from_vec(vec![Fd {
+            fd: 0,
+            mode: FdMode::ToChild,
+        }]);
         let forked = ForkedFd::new(fds).expect("Failed to create ForkedFd");
 
         match unsafe { fork() } {
@@ -221,7 +234,10 @@ mod tests {
     /// Test data flowing through stdout from the child process.
     #[test]
     fn from_child_data_flow_via_stdout() {
-        let fds = FdSet::from_vec(vec![Fd { fd: 1, mode: FdMode::FromChild }]);
+        let fds = FdSet::from_vec(vec![Fd {
+            fd: 1,
+            mode: FdMode::FromChild,
+        }]);
         let forked = ForkedFd::new(fds).expect("Failed to create ForkedFd");
 
         match unsafe { fork() } {
@@ -257,8 +273,14 @@ mod tests {
     #[test]
     fn from_child_data_flow_in_out() {
         let fds = FdSet::from_vec(vec![
-            Fd { fd: 17, mode: FdMode::FromChild },
-            Fd { fd: 21, mode: FdMode::ToChild },
+            Fd {
+                fd: 17,
+                mode: FdMode::FromChild,
+            },
+            Fd {
+                fd: 21,
+                mode: FdMode::ToChild,
+            },
         ]);
         let forked = ForkedFd::new(fds).expect("Failed to create ForkedFd");
 
@@ -300,7 +322,7 @@ mod tests {
                 let mut f = unsafe { File::from_raw_fd(17) };
                 exit_on_err(f.write_all(&buf));
                 exit_on_err(f.flush());
-                drop(f);  // because of the "read_to_end", need to close the FD.
+                drop(f); // because of the "read_to_end", need to close the FD.
 
                 // Read from fd 21.
                 let mut f = unsafe { File::from_raw_fd(21) };
@@ -321,7 +343,10 @@ mod tests {
         match (&map.direction, expected) {
             (StreamDirection::ToChild, StreamDirection::ToChild) => {}
             (StreamDirection::FromChild, StreamDirection::FromChild) => {}
-            _ => panic!("unexpected direction mapping: found {:?}, expected {:?}", map.direction, expected),
+            _ => panic!(
+                "unexpected direction mapping: found {:?}, expected {:?}",
+                map.direction, expected
+            ),
         }
     }
 
