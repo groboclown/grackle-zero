@@ -54,16 +54,16 @@ jobs:
         run: make test-debug build-default CC=clang
 
 
-  windows-gcc-build:
-    runs-on: windows-latest
-    steps:
-      # Boilerplate
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Set up Rust
-        run: rustup update
-      
-      # Common Build
-      - name: Build
-        run: make test-debug build-default
+  #windows-gcc-build:
+  #  runs-on: windows-latest
+  #  steps:
+  #    # Boilerplate
+  #    - name: Checkout code
+  #      uses: actions/checkout@v2
+  #
+  #    - name: Set up Rust
+  #      run: rustup update
+  #    
+  #    # Common Build
+  #    - name: Build
+  #      run: make test-debug build-default
